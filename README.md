@@ -1,43 +1,42 @@
-# 🦾 Physical Rehabilitation Software Suite (Capstone Project)
+# Squish Therapy Systems
 
-Welcome to the official repository for the **Physical Rehabilitation System Capstone Project**. This repository contains the complete software stack—including high-speed embedded microcontroller firmware for bio-feedback sensor decoding and a real-time Qt desktop graphical interface (GUI) for client management and analytics.
+## Overview
 
----
+Squish Therapy Systems is a comprehensive physical rehabilitation and bio-feedback platform developed as a Senior Capstone Project. The system integrates custom hardware sensor data acquisition with a real-time desktop graphical user interface (GUI) designed for clinical monitoring, data analytics, and patient progress tracking.
 
-## 📐 System Architecture Overview
+The architecture is divided into two primary subsystems:
+1. **Firmware (`firmware/`)**: High-performance microcontroller software for zero-latency sensor decoding.
+2. **Graphical Interface (`gui/`)**: A PySide6 desktop application for real-time visualization and historical database management.
 
-```mermaid
-graph TD;
-    SubGraph1["Embedded Hardware / Sensors"] -->|High-Speed Quadrature Signal| Hardware["LM324 Schmitt Trigger Conditioning"]
-    Hardware -->|Port Manipulation / Interrupts| Firmware["Arduino Microcontroller (Firmware)"]
-    Firmware -->|USB / Serial Protocol (115200 Baud)| DesktopGUI["PySide6 / PyQtGraph Desktop GUI"]
-    DesktopGUI -->|CRUD Operations| Database[("SQLite Local Database (rehab_test.db)")]
-    DesktopGUI -->|Real-Time Rendering| Dashboard["Client & Live Session Dashboard"]
-```
+## System Architecture
 
----
+The software suite operates over a 115200 baud serial connection, translating raw mechanical input into clinical metrics.
 
-## 📁 Repository Structure
+- **Hardware Layer**: Utilizes an LM324 Schmitt Trigger for signal conditioning to eliminate optical noise and hardware bounce.
+- **Embedded Layer**: AVR C++ implementations utilizing direct port manipulation (`PIND`) and interrupt-driven state machines for 4X quadrature optical encoder decoding (2400 CPR).
+- **Application Layer**: Python-based Qt interface utilizing PyQtGraph for hardware-accelerated rendering and SQLite for persistent, localized storage of patient records.
+
+## Directory Structure
 
 ```text
-capstone/
-├── README.md               # Project overview & documentation
-├── .gitignore              # Git ignore rules for Python & build artifacts
-├── firmware/               # Microcontroller / Embedded Systems Code
+squish-therapy/
+├── README.md               # Technical documentation and setup guide
+├── .gitignore              # Ignored build artifacts and environments
+├── firmware/               # Embedded systems and microcontroller code
 │   └── encoder/
-│       └── test_encoder.cpp # High-speed 4X optical quadrature encoder decoder
-└── gui/                    # Rehabilitation Test & Monitoring Desktop Application
-    ├── main.py             # Qt Application Entrypoint & Navigation
-    ├── database.py         # SQLite Data Access Layer
-    ├── simulation.py       # Live & Historical Test Session Generators
-    ├── theme.py            # Styling & Color Palette Tokens
-    ├── utils.py            # Helper Functions & Formatting
-    ├── requirements.txt    # Python Dependencies
-    ├── setup.sh            # Automated Linux/WSL Environment Installer
-    ├── run.sh              # One-Click Application Launcher
-    ├── data/               # Persistent Data Storage
-    │   └── rehab_test.db   # SQLite Database File
-    └── screens/            # Application Screens & Views
+│       └── test_encoder.cpp # High-speed 4X optical encoder decoding firmware
+└── gui/                    # Rehabilitation Test Desktop Application
+    ├── main.py             # Qt Application entry point
+    ├── database.py         # SQLite data access layer and schema
+    ├── simulation.py       # Algorithmic test session data generation
+    ├── theme.py            # Global UI styling tokens
+    ├── utils.py            # Shared utility functions
+    ├── requirements.txt    # Python package dependencies
+    ├── setup.sh            # Environment initialization script
+    ├── run.sh              # Application execution script
+    ├── data/               # Local database storage
+    │   └── rehab_test.db   # SQLite patient database
+    └── screens/            # Application views and routing
         ├── client_dashboard.py
         ├── client_list.py
         ├── create_client.py
@@ -45,49 +44,36 @@ capstone/
         └── live_test.py
 ```
 
----
+## Installation & Deployment
 
-## ⚡ Firmware Subsystem (`firmware/`)
+### Prerequisites
+- Python 3.10 or higher
+- Linux/Unix environment (WSL supported)
+- AVR-GCC / Arduino IDE (for firmware deployment)
 
-The firmware directory contains low-level C++ drivers for sensor decoding and data acquisition.
+### Application Setup
 
-### 🔬 Optical Encoder Reader (`firmware/encoder/test_encoder.cpp`)
-* **Resolution:** 2400 Counts Per Revolution (CPR) ($0.15^\circ$ angular resolution).
-* **Signal Conditioning:** Pre-filtered via LM324 Schmitt Triggers to eliminate contact bounce and optical noise.
-* **Performance:** Implements **Direct AVR Port Manipulation (`PIND`)** and a 16-state quadrature state-lookup table inside hardware interrupt handlers (`CHANGE`) for sub-microsecond, zero-latency 4X state decoding.
-* **Baud Rate:** `115200` bps.
+The graphical interface can be initialized and executed via the provided shell scripts:
 
----
+1. **Initialize the Environment**:
+   Executes the dependency installation and establishes a local virtual environment.
+   ```bash
+   cd gui
+   chmod +x setup.sh run.sh
+   ./setup.sh
+   ```
 
-## 💻 Graphical Interface Subsystem (`gui/`)
+2. **Launch the Application**:
+   ```bash
+   ./run.sh
+   ```
 
-The GUI provides clinicians with real-time feedback, interactive graphing, and historical progression tracking for rehabilitation patients.
-
-### 🚀 Quick Start (Setup & Execution)
-
-#### 1. Automated Setup (Recommended)
-From the root of the repository, execute the automated environment builder:
-```bash
-cd gui
-chmod +x setup.sh run.sh
-./setup.sh
-```
-
-#### 2. Running the Application
-Launch the GUI using the quick-run script:
-```bash
-./run.sh
-```
-*Or manually activate the virtual environment:*
+Alternatively, the application can be executed manually:
 ```bash
 source ~/.virtualenvs/rehab_gui/bin/activate
 python3 main.py
 ```
 
----
+## Licensing & Academic Integrity
 
-## 🛠️ Stack & Dependencies
-* **Language:** Python 3.10+ / C++ (AVR-GCC / Arduino)
-* **GUI Framework:** PySide6 (Qt for Python)
-* **Real-time Plotting:** PyQtGraph & NumPy
-* **Database:** SQLite3
+This project is developed for academic purposes as part of a University Capstone curriculum. All rights reserved by the development team.
