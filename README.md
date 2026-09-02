@@ -1,8 +1,8 @@
-# Squish Therapy
+# Squish Therapy: FlexSense
 
 ## Overview
 
-Squish Therapy Systems is a comprehensive physical rehabilitation and bio-feedback platform developed as a Senior Capstone Project. The system integrates custom hardware sensor data acquisition with a real-time desktop graphical user interface (GUI) designed for clinical monitoring, data analytics, and patient progress tracking.
+The **FlexSense** is a comprehensive physical rehabilitation and bio-feedback platform developed as a Senior Capstone Project by Squish Therapy Systems. The system integrates the custom FlexSense hardware sensor device with a real-time desktop graphical user interface (GUI) designed for clinical monitoring, data analytics, and patient progress tracking.
 
 The architecture is divided into two primary subsystems:
 1. **Firmware (`firmware/`)**: High-performance microcontroller software for zero-latency sensor decoding.
