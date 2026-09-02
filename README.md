@@ -13,7 +13,7 @@ The architecture is divided into two primary subsystems:
 The software suite operates over a 115200 baud serial connection, translating raw mechanical input into clinical metrics.
 
 - **Hardware Layer**: Utilizes an LM324 Schmitt Trigger for signal conditioning to eliminate optical noise and hardware bounce.
-- **Embedded Layer**: AVR C++ implementations utilizing direct port manipulation (`PIND`) and interrupt-driven state machines for 4X quadrature optical encoder decoding (2400 CPR).
+- **Embedded Layer**: STM32 C++ implementations utilizing direct port manipulation (`GPIOA->IDR`) and interrupt-driven state machines for 4X quadrature optical encoder decoding (2400 CPR).
 - **Application Layer**: Python-based Qt interface utilizing PyQtGraph for hardware-accelerated rendering and SQLite for persistent, localized storage of patient records.
 
 ## Directory Structure
@@ -49,7 +49,7 @@ squish-therapy/
 ### Prerequisites
 - Python 3.10 or higher
 - Linux/Unix environment (WSL supported)
-- AVR-GCC / Arduino IDE (for firmware deployment)
+- STM32CubeIDE / Arduino IDE with STM32duino (for firmware deployment)
 
 ### Application Setup
 
