@@ -1,4 +1,4 @@
-# Squish Therapy Systems
+# Squish Therapy
 
 ## Overview
 
@@ -73,7 +73,3 @@ Alternatively, the application can be executed manually:
 source ~/.virtualenvs/rehab_gui/bin/activate
 python3 main.py
 ```
-
-## Licensing & Academic Integrity
-
-This project is developed for academic purposes as part of a University Capstone curriculum. All rights reserved by the development team.
