@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **FlexSense** is a comprehensive physical rehabilitation and bio-feedback platform developed as a Senior Capstone Project by Squish Therapy Systems. The system integrates the custom FlexSense hardware sensor device with a real-time desktop graphical user interface (GUI) designed for clinical monitoring, data analytics, and patient progress tracking.
+The **FlexSense** is a comprehensive physical rehabilitation and bio-feedback platform developed as a Senior Capstone Project by Squish Therapy. The system integrates the custom FlexSense hardware sensor device with a real-time desktop graphical user interface (GUI) designed for clinical monitoring, data analytics, and patient progress tracking.
 
 The architecture is divided into two primary subsystems:
 1. **Firmware (`firmware/`)**: High-performance microcontroller software for zero-latency sensor decoding.
@@ -12,7 +12,6 @@ The architecture is divided into two primary subsystems:
 
 The software suite operates over a 115200 baud serial connection, translating raw mechanical input into clinical metrics.
 
-- **Hardware Layer**: Utilizes an LM324 Schmitt Trigger for signal conditioning to eliminate optical noise and hardware bounce.
 - **Embedded Layer**: STM32 C++ implementations utilizing direct port manipulation (`GPIOA->IDR`) and interrupt-driven state machines for 4X quadrature optical encoder decoding (2400 CPR).
 - **Application Layer**: Python-based Qt interface utilizing PyQtGraph for hardware-accelerated rendering and SQLite for persistent, localized storage of patient records.
 
