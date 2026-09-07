@@ -1,7 +1,12 @@
 """
-Live Test screen — real-time dual y-axis graphs with simulated data.
-Strength is displayed as a constant label (isotonic).
-After stopping, user chooses to Save or Discard test data.
+Texas A&M University
+Electronic Systems Engineering Technology
+ESET-469 Embedded Real Time Software Development
+Author: Squish Therapy
+File: live_test.py
+--------
+Real-time 60 FPS Range of Motion (ROM), Velocity, and SpO2 live plotting
+screen interacting with the STM32F401RE FlexSense encoder hardware.
 """
 
 import time
@@ -18,6 +23,7 @@ import pyqtgraph as pg
 from theme import COLORS
 from simulation import LiveDataGenerator
 from utils import patch_all_axes
+from hardware_interface import STM32EncoderInterface
 
 
 class LiveTestScreen(QWidget):
@@ -34,9 +40,11 @@ class LiveTestScreen(QWidget):
         self.client_id = None
         self.session_id = None
         self.generator = None
+        self.hw = STM32EncoderInterface()
+        self._hw_start_ms = None
         self.is_running = False
         self.elapsed_time = 0.0
-        self.dt = 0.02  # 50 Hz → 20ms
+        self.dt = 0.016  # ~60 Hz update rate
         self.time_window = 10.0  # seconds visible on screen
 
         # Data buffers (kept until save/discard decision)
@@ -377,9 +385,10 @@ class LiveTestScreen(QWidget):
         self.label_spo2.setPos(t_val, spo2_val)
 
     def _setup_timer(self):
-        """Create the QTimer for live data updates."""
+        """Create high-precision QTimer for smooth 60 FPS live data updates."""
         self.timer = QTimer(self)
-        self.timer.setInterval(int(self.dt * 1000))  # 20ms
+        self.timer.setTimerType(Qt.PreciseTimer)
+        self.timer.setInterval(int(self.dt * 1000))  # 16ms
         self.timer.timeout.connect(self._update_data)
 
     def setup(self, client_id):
@@ -391,6 +400,7 @@ class LiveTestScreen(QWidget):
         """Reset all data and graphs."""
         self.is_running = False
         self.elapsed_time = 0.0
+        self._hw_start_ms = None
         self.time_data = []
         self.rom_data = []
         self.speed_data = []
@@ -468,6 +478,7 @@ class LiveTestScreen(QWidget):
         self._start_time = time.time()
         self.elapsed_time = 0.0
         self.ticks = 0
+        self._hw_start_ms = None
 
         self.lbl_status.setText("RECORDING")
         self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 16px; font-weight: bold;")
@@ -486,12 +497,23 @@ class LiveTestScreen(QWidget):
             }}
         """)
 
+        # Connect and command hardware stream if available
+        ok, msg = self.hw.connect()
+        if ok:
+            self.hw.start_streaming()
+            self.lbl_status.setText("RECORDING (STM32 Live)")
+        else:
+            self.lbl_status.setText("RECORDING (Simulated)")
+
         self.timer.start()
 
     def _stop_test(self):
         """Stop the live test — show save/discard options."""
         self.timer.stop()
         self.is_running = False
+
+        if self.hw.is_connected:
+            self.hw.stop_streaming()
 
         self.lbl_status.setText("STOPPED - Save or Discard?")
         self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 16px; font-weight: bold;")
@@ -567,6 +589,7 @@ class LiveTestScreen(QWidget):
         self.spin_resistance.setEnabled(True)
 
         # Clear buffers
+        self._hw_start_ms = None
         self.full_time_data = []
         self.full_rom_data = []
         self.full_speed_data = []
@@ -577,26 +600,16 @@ class LiveTestScreen(QWidget):
         self.speed_data = []
         self.spo2_data = []
 
-    def _update_data(self):
-        """Called every timer tick to generate and plot new data."""
-        if not self.generator:
-            return
-
-        # Use system clock to prevent event-loop timing drift
-        self.elapsed_time = time.time() - self._start_time
-
-        rom, speed, spo2 = self.generator.next_sample(self.elapsed_time)
-
-        self.full_time_data.append(self.elapsed_time)
+    def _append_sample(self, t_val, rom, speed, spo2):
+        self.full_time_data.append(t_val)
         self.full_rom_data.append(rom)
         self.full_speed_data.append(speed)
         self.full_spo2_data.append(spo2)
 
-        self.time_data.append(self.elapsed_time)
+        self.time_data.append(t_val)
         self.rom_data.append(rom)
         self.speed_data.append(speed)
         self.spo2_data.append(spo2)
-
         self.ticks += 1
 
         # Rolling window
@@ -606,8 +619,32 @@ class LiveTestScreen(QWidget):
             self.speed_data = self.speed_data[-self.MAX_POINTS:]
             self.spo2_data = self.spo2_data[-self.MAX_POINTS:]
 
-        # Throttle GUI updates to ~16 Hz (every 3rd tick) to prevent event loop choking
-        if self.ticks % 3 == 0:
+    def _update_data(self):
+        """Called every timer tick to read hardware or generate simulated data."""
+        self.elapsed_time = time.time() - self._start_time
+        new_data = False
+
+        if self.hw.is_connected:
+            samples = self.hw.read_samples()
+            if samples:
+                for t_ms, _, rom, speed, *rest in samples:
+                    if self._hw_start_ms is None:
+                        self._hw_start_ms = t_ms
+                    sample_time = (t_ms - self._hw_start_ms) / 1000.0
+                    spo2 = self.generator.next_sample(sample_time)[2] if self.generator else 98.0
+                    self._append_sample(sample_time, rom, speed, spo2)
+                new_data = True
+            elif not self.time_data:
+                # Initial point if no data arrived yet
+                self._append_sample(0.0, self.hw.last_angle, self.hw.last_velocity, 98.0)
+                new_data = True
+        elif self.generator:
+            rom, speed, spo2 = self.generator.next_sample(self.elapsed_time)
+            self._append_sample(self.elapsed_time, rom, speed, spo2)
+            new_data = True
+
+        # Render whenever new data arrives for smooth 60 FPS plotting without artificial throttling
+        if new_data and self.time_data:
             t = np.array(self.time_data)
             
             # Update stacked plots
@@ -617,12 +654,13 @@ class LiveTestScreen(QWidget):
             # Update SpO2 vs Time
             self.curve_spo2.setData(t, np.array(self.spo2_data))
     
-            # Scroll X axis to show the time window
-            if self.elapsed_time > self.time_window:
-                x_min = self.elapsed_time - self.time_window
-                x_max = self.elapsed_time
+            # Scroll X axis smoothly following the latest data point
+            current_t = self.time_data[-1]
+            if current_t > self.time_window:
+                x_min = current_t - self.time_window
+                x_max = current_t
             else:
-                x_min = 0
+                x_min = 0.0
                 x_max = self.time_window
                 
             self.plot_rom.setXRange(x_min, x_max, padding=0)
@@ -630,6 +668,6 @@ class LiveTestScreen(QWidget):
             self.plot_spo2.setXRange(x_min, x_max, padding=0)
     
             # Update timer label
-            self.lbl_timer.setText(f"{self.elapsed_time:.1f} s")
+            self.lbl_timer.setText(f"{current_t:.1f} s")
 
 

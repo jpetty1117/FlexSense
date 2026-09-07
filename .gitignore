@@ -1,12 +1,22 @@
-# Python
+# ==============================================================================
+# Git Ignore Rules - Squish Therapy Project
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Python & Virtual Environments
+# ------------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+.venv/
+venv/
+ENV/
 env/
+env.bak/
+venv.bak/
 build/
-develop-eggs/
 dist/
 downloads/
 eggs/
@@ -20,31 +30,61 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Virtual Environments
-.venv/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Database & Runtime Data
+# ------------------------------------------------------------------------------
+# Database Runtime Artifacts
+# ------------------------------------------------------------------------------
+*.sqlite
 *.sqlite3
-# Keep sample database schema if needed, ignore transient DB files if large
-# gui/data/rehab_test.db
+*.db-journal
+*.db-wal
+*.db-shm
 
-# IDE & Editor files
+# ------------------------------------------------------------------------------
+# Embedded & STM32 Firmware
+# ------------------------------------------------------------------------------
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+compile_commands.json
+.clangd/
+
+# Build outputs
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.d
+
+# STM32CubeMX Toolchain & IDE Folders
+.mxproject
+EWARM/
+MDK-ARM/
+SW4STM32/
+STM32CubeIDE/
+
+# STM32 HAL / CMSIS vendor drivers (managed via PlatformIO stm32cube framework)
+Drivers/
+
+# CubeMX backups
+*.ioc.bak
+
+# ------------------------------------------------------------------------------
+# IDEs & System Files
+# ------------------------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.bak
+*.orig
 .DS_Store
-
-# C++ / Embedded Build Artifacts
-*.o
-*.elf
-*.bin
-*.hex
-.pio/
-.clang-format
+Thumbs.db
+.directory
