@@ -405,12 +405,15 @@ class HistoryViewerScreen(QWidget):
         session_id = session['id']
 
         # Update session info
+        notes_raw = session.get('notes', '') or 'N/A'
+        notes_formatted = notes_raw.replace(' | ', '\n')
+
         self.lbl_session_info.setText(
             f"Date: {session['date'][:19]}\n"
             f"Target Resistance: {session['target_resistance']} lbs\n"
             f"Max ROM: {session['target_angle']}°\n"
-            f"Status: {session.get('status', 'N/A')}\n"
-            f"Notes: {session.get('notes', 'N/A')}"
+            f"Status: {session.get('status', 'completed')}\n\n"
+            f"[PT Metrics]\n{notes_formatted}"
         )
 
         # Update strength label (constant isotonic value)
@@ -430,11 +433,13 @@ class HistoryViewerScreen(QWidget):
         timestamps = np.array([r['timestamp_s'] for r in data_rows])
         rom = np.array([r['rom_angle'] for r in data_rows])
         speed = np.array([r['speed'] for r in data_rows])
+        strength = np.array([r['strength'] for r in data_rows])
         spo2 = np.array([r['spo2'] for r in data_rows])
 
         self.current_time_data = timestamps
         self.current_rom_data = rom
         self.current_vel_data = speed
+        self.current_strength_data = strength
         self.current_spo2_data = spo2
 
         # Update stacked graphs

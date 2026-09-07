@@ -5,16 +5,19 @@ ESET-469 Embedded Real Time Software Development
 Author: Squish Therapy
 File: live_test.py
 --------
-Real-time 60 FPS Range of Motion (ROM), Velocity, and SpO2 live plotting
-screen interacting with the STM32F401RE FlexSense encoder hardware.
+Real-time 60 FPS Clinical Rehabilitation Dashboard featuring:
+- Two Side-by-Side Hero Plots: Range of Motion (ROM vs. Time) & Clinical Force Deficit Curve (Force vs. Angle)
+- Physical Therapy Quantitative HUD: Repetitions, Active ROM, Force Deficit (Weak Point), Therapy Work (J), and SpO2 Vitals
+- Seamless Top Action Toolbar with Zero Encoder Tare and Non-Shifting Save/Discard Controls
+- 1-Click Maximize/Restore for Deep Curve Analysis
 """
 
 import time
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDoubleSpinBox, QFrame, QGroupBox, QFormLayout, QSplitter,
-    QGraphicsDropShadowEffect,
+    QDoubleSpinBox, QFrame, QFormLayout, QSplitter,
+    QGraphicsDropShadowEffect, QSizePolicy,
 )
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QColor
@@ -26,12 +29,149 @@ from utils import patch_all_axes
 from hardware_interface import STM32EncoderInterface
 
 
+class HeroPlotPanel(QFrame):
+    """Encapsulated hero plot card with title bar, color chip, autoscale, and maximize buttons."""
+
+    maximize_toggled = Signal(int)  # emits plot_idx
+
+    def __init__(self, plot_idx: int, title: str, accent_color: str, parent=None):
+        super().__init__(parent)
+        self.plot_idx = plot_idx
+        self.title_text = title
+        self.accent_color = accent_color
+        self.is_maximized = False
+        self.setObjectName("hero_card")
+        self.setStyleSheet(f"""
+            QFrame#hero_card {{
+                background-color: {COLORS['bg_card']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        # Header bar
+        header = QHBoxLayout()
+        header.setContentsMargins(4, 2, 4, 2)
+        header.setSpacing(8)
+
+        # Accent dot
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color: {accent_color}; font-size: 14px;")
+        header.addWidget(dot)
+
+        self.lbl_title = QLabel(title)
+        self.lbl_title.setStyleSheet(f"color: {COLORS['text_primary']}; font-weight: bold; font-size: 14px;")
+        header.addWidget(self.lbl_title)
+
+        header.addStretch()
+
+        # Reset view button
+        self.btn_reset = QPushButton("⟲ Reset View")
+        self.btn_reset.setCursor(Qt.PointingHandCursor)
+        self.btn_reset.setFixedHeight(26)
+        self.btn_reset.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_surface']};
+                color: {COLORS['text_secondary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent_dark']};
+                color: {COLORS['accent']};
+                border-color: {COLORS['accent']};
+            }}
+        """)
+        self.btn_reset.clicked.connect(self.reset_view)
+        header.addWidget(self.btn_reset)
+
+        # Maximize / Restore button
+        self.btn_maximize = QPushButton("⛶ Maximize")
+        self.btn_maximize.setCursor(Qt.PointingHandCursor)
+        self.btn_maximize.setFixedHeight(26)
+        self.btn_maximize.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_surface']};
+                color: {COLORS['text_secondary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent_dark']};
+                color: {COLORS['accent']};
+                border-color: {COLORS['accent']};
+            }}
+        """)
+        self.btn_maximize.clicked.connect(self._on_maximize_clicked)
+        header.addWidget(self.btn_maximize)
+
+        layout.addLayout(header)
+
+        # PyQtGraph PlotWidget
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground(COLORS['graph_bg'])
+        self.plot_item = self.plot_widget.getPlotItem()
+        
+        # Ensure ample margin on left axis so "Angle (°)" or "Force (lbs)" is never clipped
+        self.plot_item.getAxis('left').setWidth(55)
+        self.plot_item.getAxis('bottom').setHeight(30)
+        patch_all_axes(self.plot_item)
+
+        layout.addWidget(self.plot_widget, stretch=1)
+
+    def _on_maximize_clicked(self):
+        self.maximize_toggled.emit(self.plot_idx)
+
+    def set_maximized(self, is_max: bool):
+        self.is_maximized = is_max
+        if is_max:
+            self.btn_maximize.setText("🗗 Restore")
+            self.btn_maximize.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLORS['accent_dark']};
+                    color: {COLORS['accent']};
+                    border: 1px solid {COLORS['accent']};
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 12px;
+                    font-weight: bold;
+                }}
+            """)
+        else:
+            self.btn_maximize.setText("⛶ Maximize")
+            self.btn_maximize.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLORS['bg_surface']};
+                    color: {COLORS['text_secondary']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {COLORS['accent_dark']};
+                    color: {COLORS['accent']};
+                    border-color: {COLORS['accent']};
+                }}
+            """)
+
+    def reset_view(self):
+        self.plot_item.enableAutoRange()
+
+
 class LiveTestScreen(QWidget):
-    """Live test screen with real-time updating graphs."""
+    """Clinical physical therapy dashboard with side-by-side hero plots and quantitative metrics."""
 
     test_completed = Signal(int)  # emits session_id
 
-    # Max points to show on live graph (rolling window)
     MAX_POINTS = 1500  # 30 seconds at 50 Hz
 
     def __init__(self, db, parent=None):
@@ -47,25 +187,44 @@ class LiveTestScreen(QWidget):
         self.dt = 0.016  # ~60 Hz update rate
         self.time_window = 10.0  # seconds visible on screen
 
-        # Data buffers (kept until save/discard decision)
+        # Data buffers
         self.full_time_data = []
         self.full_rom_data = []
         self.full_speed_data = []
+        self.full_force_data = []
         self.full_spo2_data = []
 
-        # Rolling window buffers for live plotting
         self.time_data = []
         self.rom_data = []
         self.speed_data = []
+        self.force_data = []
         self.spo2_data = []
         self.ticks = 0
+
+        # Physical Therapy Clinical Metrics
+        self.reps_count = 0
+        self.max_session_rom = 0.0
+        self.therapy_work_j = 0.0
+        self.last_deficit_angle = None
+        self.last_deficit_force = None
+        self.current_spo2 = 98.0
+        self._angle_zero_offset = 0.0
+
+        # Repetition state machine
+        self.rep_state = "EXTENDED"
+        self.rep_rom_buf = []
+        self.rep_force_buf = []
+        self.session_baseline_rom = 0.0
+
+        # Hero Plot layout state
+        self._maximized_idx = None
 
         self._build_ui()
         self._setup_timer()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setContentsMargins(18, 12, 18, 12)
         layout.setSpacing(10)
 
         # ── Header ─────────────────────────────────────────
@@ -73,7 +232,7 @@ class LiveTestScreen(QWidget):
 
         title = QLabel("Live Test")
         title.setObjectName("title")
-        title.setStyleSheet(f"font-size: 22px; color: {COLORS['text_primary']}; border-bottom: 2px solid {COLORS['accent']}; padding-bottom: 6px;")
+        title.setStyleSheet(f"font-size: 22px; color: {COLORS['text_primary']}; border-bottom: 2px solid {COLORS['accent']}; padding-bottom: 4px;")
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(12)
         shadow.setOffset(0, 2)
@@ -84,67 +243,76 @@ class LiveTestScreen(QWidget):
         header_layout.addStretch()
 
         self.lbl_status = QLabel("IDLE")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 16px; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 15px; font-weight: bold;")
         header_layout.addWidget(self.lbl_status)
 
         layout.addLayout(header_layout)
 
-        # ── Controls Panel ─────────────────────────────────
+        # ── Action Controls Toolbar (Single Integrated Row) ─
         controls = QFrame()
         controls.setObjectName("card")
+        controls.setStyleSheet(f"""
+            QFrame#card {{
+                background-color: {COLORS['bg_card']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
         controls_layout = QHBoxLayout(controls)
-        controls_layout.setContentsMargins(16, 12, 16, 12)
+        controls_layout.setContentsMargins(14, 8, 14, 8)
+        controls_layout.setSpacing(12)
 
-        # Test Parameters — only resistance (ROM is derived from data)
-        params_group = QGroupBox("Test Parameters")
-        params_form = QFormLayout(params_group)
-        params_form.setSpacing(8)
-
+        # Target Load Parameter
+        params_form = QFormLayout()
+        params_form.setSpacing(6)
         self.spin_resistance = QDoubleSpinBox()
-        self.spin_resistance.setRange(0.0, 100.0)
+        self.spin_resistance.setRange(1.0, 100.0)
         self.spin_resistance.setValue(10.0)
         self.spin_resistance.setSuffix(" lbs")
-        self.spin_resistance.setMinimumHeight(36)
-        params_form.addRow("Target Resistance:", self.spin_resistance)
+        self.spin_resistance.setMinimumHeight(34)
+        self.spin_resistance.valueChanged.connect(self._on_resistance_changed)
+        params_form.addRow("Target Load:", self.spin_resistance)
+        controls_layout.addLayout(params_form)
 
-        controls_layout.addWidget(params_group)
-
-        # Strength display (constant, isotonic)
-        strength_group = QGroupBox("Isotonic Strength")
-        strength_layout = QVBoxLayout(strength_group)
-        self.lbl_strength = QLabel("10.0 lbs")
-        self.lbl_strength.setAlignment(Qt.AlignCenter)
-        self.lbl_strength.setStyleSheet(f"""
-            font-size: 28px;
-            font-weight: bold;
-            color: {COLORS['graph_strength']};
-            padding: 8px;
+        # Zero / Tare Encoder Button
+        self.btn_zero = QPushButton("⟲ Zero Encoder")
+        self.btn_zero.setCursor(Qt.PointingHandCursor)
+        self.btn_zero.setMinimumHeight(38)
+        self.btn_zero.setMinimumWidth(125)
+        self.btn_zero.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_surface']};
+                color: {COLORS['info']};
+                border: 1px solid {COLORS['info']};
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 13px;
+                padding: 4px 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['info']};
+                color: white;
+            }}
         """)
-        strength_layout.addWidget(self.lbl_strength)
-        lbl_const = QLabel("(Constant Resistance)")
-        lbl_const.setAlignment(Qt.AlignCenter)
-        lbl_const.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        strength_layout.addWidget(lbl_const)
-        controls_layout.addWidget(strength_group)
-
-        self.spin_resistance.valueChanged.connect(
-            lambda v: self.lbl_strength.setText(f"{v:.1f} lbs")
-        )
+        self.btn_zero.clicked.connect(self._zero_encoder)
+        controls_layout.addWidget(self.btn_zero)
 
         controls_layout.addStretch()
 
-        # Start/Stop Button
+        # Start / Stop Button
         self.btn_start_stop = QPushButton("Start Test")
         self.btn_start_stop.setObjectName("primary")
-
-        self.btn_start_stop.setMinimumHeight(56)
-        self.btn_start_stop.setMinimumWidth(180)
+        self.btn_start_stop.setCursor(Qt.PointingHandCursor)
+        self.btn_start_stop.setMinimumHeight(44)
+        self.btn_start_stop.setMinimumWidth(150)
         self.btn_start_stop.setStyleSheet(f"""
             QPushButton {{
-                font-size: 18px;
+                font-size: 16px;
+                font-weight: bold;
                 background-color: {COLORS['accent_dark']};
                 border: 2px solid {COLORS['accent']};
-                border-radius: 12px;
+                border-radius: 8px;
+                color: white;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['accent']};
@@ -153,258 +321,337 @@ class LiveTestScreen(QWidget):
         self.btn_start_stop.clicked.connect(self._toggle_test)
         controls_layout.addWidget(self.btn_start_stop)
 
-        # Timer label
+        # Save to Database Button (integrated directly in toolbar, no layout shifts)
+        self.btn_save = QPushButton("✓ Save to Database")
+        self.btn_save.setObjectName("primary")
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setMinimumHeight(44)
+        self.btn_save.setMinimumWidth(160)
+        self.btn_save.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 15px;
+                font-weight: bold;
+                background-color: #0f8a6b;
+                border: 2px solid {COLORS['accent']};
+                border-radius: 8px;
+                color: white;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
+        self.btn_save.clicked.connect(self._save_test)
+        self.btn_save.setVisible(False)
+        controls_layout.addWidget(self.btn_save)
+
+        # Discard Button
+        self.btn_discard = QPushButton("✕ Discard")
+        self.btn_discard.setObjectName("danger")
+        self.btn_discard.setCursor(Qt.PointingHandCursor)
+        self.btn_discard.setMinimumHeight(44)
+        self.btn_discard.setMinimumWidth(100)
+        self.btn_discard.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 15px;
+                font-weight: bold;
+                background-color: #5c1a1a;
+                border: 2px solid {COLORS['danger']};
+                border-radius: 8px;
+                color: {COLORS['danger']};
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['danger']};
+                color: white;
+            }}
+        """)
+        self.btn_discard.clicked.connect(self._discard_test)
+        self.btn_discard.setVisible(False)
+        controls_layout.addWidget(self.btn_discard)
+
+        # Session Timer
         self.lbl_timer = QLabel("0.0 s")
-        self.lbl_timer.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 20px; font-weight: bold;")
+        self.lbl_timer.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 22px; font-weight: bold;")
         self.lbl_timer.setAlignment(Qt.AlignCenter)
-        self.lbl_timer.setMinimumWidth(100)
+        self.lbl_timer.setMinimumWidth(85)
         controls_layout.addWidget(self.lbl_timer)
 
         layout.addWidget(controls)
 
-        # ── Save / Discard bar (hidden by default) ─────────
-        self.save_discard_bar = QFrame()
-        self.save_discard_bar.setObjectName("card")
-        sd_layout = QHBoxLayout(self.save_discard_bar)
-        sd_layout.setContentsMargins(16, 10, 16, 10)
+        # ── Physical Therapy Quantitative HUD Strip ────────
+        hud_frame = QFrame()
+        hud_frame.setObjectName("hud_strip")
+        hud_frame.setStyleSheet(f"""
+            QFrame#hud_strip {{
+                background-color: {COLORS['bg_card']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+        hud_layout = QHBoxLayout(hud_frame)
+        hud_layout.setContentsMargins(12, 8, 12, 8)
+        hud_layout.setSpacing(10)
 
-        sd_label = QLabel("Test complete — save this session?")
-        sd_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 15px; font-weight: bold;")
-        sd_layout.addWidget(sd_label)
-        sd_layout.addStretch()
+        # 1. Repetitions Card
+        hud_layout.addWidget(self._create_hud_card(
+            title="REPETITIONS",
+            attr_name="lbl_hud_reps",
+            sub_attr_name="lbl_hud_reps_sub",
+            default_val="0 Reps",
+            default_sub="Target: 10 Reps",
+            val_color=COLORS['accent'],
+        ))
 
-        self.btn_save = QPushButton("Save to Database")
-        self.btn_save.setObjectName("primary")
-        self.btn_save.setCursor(Qt.PointingHandCursor)
-        self.btn_save.setMinimumHeight(44)
-        self.btn_save.setMinimumWidth(200)
-        self.btn_save.clicked.connect(self._save_test)
-        sd_layout.addWidget(self.btn_save)
+        # 2. Active ROM Card
+        hud_layout.addWidget(self._create_hud_card(
+            title="ACTIVE ROM",
+            attr_name="lbl_hud_rom",
+            sub_attr_name="lbl_hud_rom_sub",
+            default_val="0.0°",
+            default_sub="Current: 0.0°",
+            val_color=COLORS['graph_rom'],
+        ))
 
-        self.btn_discard = QPushButton("Discard")
-        self.btn_discard.setObjectName("danger")
-        self.btn_discard.setCursor(Qt.PointingHandCursor)
-        self.btn_discard.setMinimumHeight(44)
-        self.btn_discard.clicked.connect(self._discard_test)
-        sd_layout.addWidget(self.btn_discard)
+        # 3. Force Deficit (Weak Point) Card
+        hud_layout.addWidget(self._create_hud_card(
+            title="FORCE DEFICIT (WEAK POINT)",
+            attr_name="lbl_hud_deficit",
+            sub_attr_name="lbl_hud_deficit_sub",
+            default_val="Full Strength",
+            default_sub="Target: 10.0 lbs",
+            val_color=COLORS['accent'],
+        ))
 
-        self.save_discard_bar.setVisible(False)
-        layout.addWidget(self.save_discard_bar)
+        # 4. Therapy Work Done Card
+        hud_layout.addWidget(self._create_hud_card(
+            title="THERAPY WORK",
+            attr_name="lbl_hud_work",
+            sub_attr_name="lbl_hud_work_sub",
+            default_val="0 J",
+            default_sub="Cumulative Energy",
+            val_color=COLORS['graph_strength'],
+        ))
 
-        # ── Hint bar ───────────────────────────────────────
-        hint = QLabel("Drag left/right axis to scale Y  |  Drag in graph to pan X  |  Scroll to zoom  |  Right-click to reset")
-        hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; padding: 2px 8px;")
-        layout.addWidget(hint)
+        # 5. SpO2 Vitals Card
+        hud_layout.addWidget(self._create_hud_card(
+            title="PULSE OXIMETRY (VITALS)",
+            attr_name="lbl_hud_spo2",
+            sub_attr_name="lbl_hud_spo2_sub",
+            default_val="98%",
+            default_sub="● Normal Saturation",
+            val_color=COLORS['graph_spo2'],
+        ))
 
-        # ── Graphs ─────────────────────────────────────────
-        splitter = QSplitter(Qt.Vertical)
+        layout.addWidget(hud_frame)
+
+        # ── Two Hero Plots (Side-by-Side Horizontal QSplitter)
         pg.setConfigOptions(antialias=True)
+        self.hero_splitter = QSplitter(Qt.Horizontal)
+        self.hero_splitter.setChildrenCollapsible(False)
 
-        # Graph 1: Stacked ROM & Velocity vs Time
-        self.graph_widget_1 = pg.GraphicsLayoutWidget()
-        self.graph_widget_1.setBackground(COLORS['graph_bg'])
-
-        self.plot_rom = self.graph_widget_1.addPlot(row=0, col=0)
-        self.plot_rom.setTitle("ROM vs Time", color=COLORS['text_primary'], size="13pt")
-        self.plot_rom.setLabel('left', 'ROM (°)', color=COLORS['graph_rom'])
-        self.plot_rom.showGrid(x=True, y=True, alpha=0.2)
+        # Hero Plot 1 (Left): Range of Motion vs. Time
+        self.panel_rom = HeroPlotPanel(0, "Kinematics — Range of Motion (ROM) vs. Time", COLORS['graph_rom'])
+        self.plot_rom = self.panel_rom.plot_item
+        self.plot_rom.setLabel('left', 'Joint Angle (°)', color=COLORS['graph_rom'])
+        self.plot_rom.setLabel('bottom', 'Time (s)', color=COLORS['text_secondary'])
+        self.plot_rom.showGrid(x=True, y=True, alpha=0.25)
         self.plot_rom.getAxis('left').setPen(pg.mkPen(COLORS['graph_rom']))
         self.plot_rom.getAxis('left').setTextPen(pg.mkPen(COLORS['graph_rom']))
-        self.plot_rom.setMouseEnabled(x=True, y=True)
-        self.plot_rom.setMenuEnabled(True)
+        self.plot_rom.setYRange(-5, 160, padding=0)
+        self.plot_rom.setXRange(0, self.time_window, padding=0)
 
         self.curve_rom = self.plot_rom.plot(
-            pen=pg.mkPen(COLORS['graph_rom'], width=2), name="ROM"
+            pen=pg.mkPen(COLORS['graph_rom'], width=2.8), name="ROM"
         )
-        patch_all_axes(self.plot_rom)
+        self.panel_rom.maximize_toggled.connect(self._toggle_maximize)
+        self.hero_splitter.addWidget(self.panel_rom)
 
-        self.graph_widget_1.nextRow()
-        
-        self.plot_vel = self.graph_widget_1.addPlot(row=1, col=0)
-        self.plot_vel.setTitle("Velocity vs Time", color=COLORS['text_primary'], size="13pt")
-        self.plot_vel.setLabel('bottom', 'Time (s)', color=COLORS['text_secondary'])
-        self.plot_vel.setLabel('left', 'Velocity (°/s)', color=COLORS['graph_speed'])
-        self.plot_vel.showGrid(x=True, y=True, alpha=0.2)
-        self.plot_vel.getAxis('bottom').setPen(pg.mkPen(COLORS['text_secondary']))
-        self.plot_vel.getAxis('bottom').setTextPen(pg.mkPen(COLORS['text_secondary']))
-        self.plot_vel.getAxis('left').setPen(pg.mkPen(COLORS['graph_speed']))
-        self.plot_vel.getAxis('left').setTextPen(pg.mkPen(COLORS['graph_speed']))
-        self.plot_vel.setMouseEnabled(x=True, y=True)
-        self.plot_vel.setMenuEnabled(True)
+        # Hero Plot 2 (Right): Clinical Force Deficit Curve (Force vs. Angle)
+        self.panel_force = HeroPlotPanel(1, "Kinetics — Clinical Strength Curve (Force vs. Angle)", COLORS['graph_strength'])
+        self.plot_force = self.panel_force.plot_item
+        self.plot_force.setLabel('left', 'Handle Force (lbs)', color=COLORS['graph_strength'])
+        self.plot_force.setLabel('bottom', 'Joint Angle (°)', color=COLORS['text_primary'])
+        self.plot_force.showGrid(x=True, y=True, alpha=0.25)
+        self.plot_force.getAxis('left').setPen(pg.mkPen(COLORS['graph_strength']))
+        self.plot_force.getAxis('left').setTextPen(pg.mkPen(COLORS['graph_strength']))
+        self.plot_force.getAxis('bottom').setPen(pg.mkPen(COLORS['text_primary']))
+        self.plot_force.getAxis('bottom').setTextPen(pg.mkPen(COLORS['text_primary']))
+        self.plot_force.setXRange(0, 160, padding=0)
+        self.plot_force.setYRange(0, 25, padding=0)
 
-        self.plot_vel.setXLink(self.plot_rom)
-
-        self.curve_vel = self.plot_vel.plot(
-            pen=pg.mkPen(COLORS['graph_speed'], width=2), name="Velocity"
+        # Dashed Target Resistance Reference Line
+        self.line_target_force = pg.InfiniteLine(
+            pos=10.0, angle=0,
+            pen=pg.mkPen(COLORS['warning'], style=Qt.DashLine, width=1.5)
         )
-        patch_all_axes(self.plot_vel)
+        self.plot_force.addItem(self.line_target_force)
+        self.lbl_target_force_line = pg.TextItem("Target Load: 10.0 lbs", color=COLORS['warning'], anchor=(1, 1))
+        self.lbl_target_force_line.setPos(155, 10.0)
+        self.plot_force.addItem(self.lbl_target_force_line)
 
-
-        splitter.addWidget(self.graph_widget_1)
-
-        # Graph 2: SpO2 vs Time
-        self.graph_widget_2 = pg.GraphicsLayoutWidget()
-        self.graph_widget_2.setBackground(COLORS['graph_bg'])
-
-        self.plot_spo2 = self.graph_widget_2.addPlot(row=0, col=0)
-        self.plot_spo2.setTitle("SpO2 vs Time", color=COLORS['text_primary'], size="13pt")
-        self.plot_spo2.setLabel('bottom', 'Time', units='s', color=COLORS['text_secondary'])
-        self.plot_spo2.setLabel('left', 'SpO2 (%)', color=COLORS['graph_spo2'])
-        self.plot_spo2.showGrid(x=True, y=True, alpha=0.2)
-        self.plot_spo2.setYRange(92, 100)
-        self.plot_spo2.getAxis('left').setPen(pg.mkPen(COLORS['graph_spo2']))
-        self.plot_spo2.getAxis('left').setTextPen(pg.mkPen(COLORS['graph_spo2']))
-        self.plot_spo2.setMouseEnabled(x=True, y=True)
-        self.plot_spo2.setMenuEnabled(True)
-
-        self.curve_spo2 = self.plot_spo2.plot(
-            pen=pg.mkPen(COLORS['graph_spo2'], width=2), name="SpO2"
+        # Live Force vs. Angle Curve
+        self.curve_force_live = self.plot_force.plot(
+            pen=pg.mkPen(COLORS['graph_strength'], width=2.8), name="Live Force"
         )
 
-        patch_all_axes(self.plot_spo2)
+        # Deficit Callout & Marker
+        self.deficit_marker = pg.ScatterPlotItem(
+            size=14, pen=pg.mkPen(COLORS['danger'], width=2), brush=pg.mkBrush(COLORS['warning'])
+        )
+        self.plot_force.addItem(self.deficit_marker)
+        self.deficit_callout = pg.TextItem("", color=COLORS['warning'], anchor=(0.5, 1.2))
+        self.plot_force.addItem(self.deficit_callout)
+
+        self.panel_force.maximize_toggled.connect(self._toggle_maximize)
+        self.hero_splitter.addWidget(self.panel_force)
+
+        # 50/50 Initial Split
+        self.hero_splitter.setSizes([600, 600])
+        layout.addWidget(self.hero_splitter, stretch=1)
 
         self._setup_crosshair()
 
-        splitter.addWidget(self.graph_widget_2)
-        splitter.setSizes([750, 250])
+    def _create_hud_card(self, title, attr_name, sub_attr_name, default_val, default_sub, val_color):
+        """Builds a single quantitative physical therapy card."""
+        card = QFrame()
+        card.setObjectName("hud_card")
+        card.setStyleSheet(f"""
+            QFrame#hud_card {{
+                background-color: {COLORS['bg_surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+            }}
+        """)
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(10, 6, 10, 6)
+        c_layout.setSpacing(2)
 
-        layout.addWidget(splitter, stretch=1)
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; font-weight: bold; letter-spacing: 0.5px;")
+        c_layout.addWidget(lbl_title)
 
-        # Set initial ranges appropriate for bicep curl time plots
-        self.plot_rom.setXRange(0, self.time_window, padding=0)
-        self.plot_rom.setYRange(-10, 180, padding=0)
-        self.plot_vel.setYRange(-400, 400, padding=0)
+        lbl_val = QLabel(default_val)
+        lbl_val.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {val_color};")
+        setattr(self, attr_name, lbl_val)
+        c_layout.addWidget(lbl_val)
+
+        lbl_sub = QLabel(default_sub)
+        lbl_sub.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        setattr(self, sub_attr_name, lbl_sub)
+        c_layout.addWidget(lbl_sub)
+
+        return card
 
     def _setup_crosshair(self):
+        """Interactive dashed crosshairs on both hero plots."""
         pen = pg.mkPen(COLORS['accent'], style=Qt.DashLine)
         self.vLine_rom = pg.InfiniteLine(angle=90, movable=False, pen=pen)
         self.hLine_rom = pg.InfiniteLine(angle=0, movable=False, pen=pen)
-        self.vLine_vel = pg.InfiniteLine(angle=90, movable=False, pen=pen)
-        self.hLine_vel = pg.InfiniteLine(angle=0, movable=False, pen=pen)
-        self.vLine_spo2 = pg.InfiniteLine(angle=90, movable=False, pen=pen)
-        self.hLine_spo2 = pg.InfiniteLine(angle=0, movable=False, pen=pen)
-        
         self.plot_rom.addItem(self.vLine_rom, ignoreBounds=True)
         self.plot_rom.addItem(self.hLine_rom, ignoreBounds=True)
-        self.plot_vel.addItem(self.vLine_vel, ignoreBounds=True)
-        self.plot_vel.addItem(self.hLine_vel, ignoreBounds=True)
-        self.plot_spo2.addItem(self.vLine_spo2, ignoreBounds=True)
-        self.plot_spo2.addItem(self.hLine_spo2, ignoreBounds=True)
-        
+
+        self.vLine_force = pg.InfiniteLine(angle=90, movable=False, pen=pen)
+        self.hLine_force = pg.InfiniteLine(angle=0, movable=False, pen=pen)
+        self.plot_force.addItem(self.vLine_force, ignoreBounds=True)
+        self.plot_force.addItem(self.hLine_force, ignoreBounds=True)
+
         bg_color = QColor(COLORS['bg_surface'])
-        bg_color.setAlpha(180)
-        
-        self.label_rom = pg.TextItem(color=COLORS['text_primary'], fill=bg_color)
-        self.plot_rom.addItem(self.label_rom, ignoreBounds=True)
-        self.label_vel = pg.TextItem(color=COLORS['text_primary'], fill=bg_color)
-        self.plot_vel.addItem(self.label_vel, ignoreBounds=True)
-        self.label_spo2 = pg.TextItem(color=COLORS['text_primary'], fill=bg_color)
-        self.plot_spo2.addItem(self.label_spo2, ignoreBounds=True)
-        
-        self.proxy_1 = pg.SignalProxy(self.graph_widget_1.scene().sigMouseMoved, rateLimit=60, slot=self._mouse_moved_1)
-        self.proxy_2 = pg.SignalProxy(self.graph_widget_2.scene().sigMouseMoved, rateLimit=60, slot=self._mouse_moved_2)
+        bg_color.setAlpha(190)
+        self.label_rom_hover = pg.TextItem(color=COLORS['text_primary'], fill=bg_color)
+        self.plot_rom.addItem(self.label_rom_hover, ignoreBounds=True)
+        self.label_force_hover = pg.TextItem(color=COLORS['text_primary'], fill=bg_color)
+        self.plot_force.addItem(self.label_force_hover, ignoreBounds=True)
 
-    def _mouse_moved_1(self, evt):
+        self.proxy_1 = pg.SignalProxy(self.panel_rom.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._mouse_moved_rom)
+        self.proxy_2 = pg.SignalProxy(self.panel_force.plot_widget.scene().sigMouseMoved, rateLimit=60, slot=self._mouse_moved_force)
+
+    def _mouse_moved_rom(self, evt):
         if not self.time_data:
             return
-            
         pos = evt[0]
-        in_rom = self.plot_rom.sceneBoundingRect().contains(pos)
-        in_vel = self.plot_vel.sceneBoundingRect().contains(pos)
-        
-        if in_rom:
+        if self.plot_rom.sceneBoundingRect().contains(pos):
             mousePoint = self.plot_rom.vb.mapSceneToView(pos)
-            self._update_crosshair(mousePoint.x())
-        elif in_vel:
-            mousePoint = self.plot_vel.vb.mapSceneToView(pos)
-            self._update_crosshair(mousePoint.x())
+            x_val = mousePoint.x()
+            t_arr = np.array(self.time_data)
+            idx = np.searchsorted(t_arr, x_val)
+            if idx >= len(t_arr):
+                idx = len(t_arr) - 1
+            t_pt = t_arr[idx]
+            rom_pt = self.rom_data[idx]
 
-    def _mouse_moved_2(self, evt):
-        if not self.time_data:
+            self.vLine_rom.setPos(t_pt)
+            self.hLine_rom.setPos(rom_pt)
+            self.label_rom_hover.setText(f"Time: {t_pt:.1f}s\nAngle: {rom_pt:.1f}°")
+            self.label_rom_hover.setPos(t_pt, rom_pt)
+
+    def _mouse_moved_force(self, evt):
+        if not self.rom_data or not self.force_data:
             return
-            
         pos = evt[0]
-        in_spo2 = self.plot_spo2.sceneBoundingRect().contains(pos)
-        
-        if in_spo2:
-            mousePoint = self.plot_spo2.vb.mapSceneToView(pos)
-            self._update_crosshair(mousePoint.x())
+        if self.plot_force.sceneBoundingRect().contains(pos):
+            mousePoint = self.plot_force.vb.mapSceneToView(pos)
+            x_val = mousePoint.x()
+            y_val = mousePoint.y()
+            self.vLine_force.setPos(x_val)
+            self.hLine_force.setPos(y_val)
+            self.label_force_hover.setText(f"Angle: {x_val:.1f}°\nForce: {y_val:.1f} lbs")
+            self.label_force_hover.setPos(x_val, y_val)
 
-    def _update_crosshair(self, x):
-        t_arr = np.array(self.time_data)
-        if len(t_arr) == 0:
-            return
-            
-        idx = np.searchsorted(t_arr, x)
-        if idx >= len(t_arr):
-            idx = len(t_arr) - 1
-        elif idx > 0:
-            if abs(x - t_arr[idx-1]) < abs(x - t_arr[idx]):
-                idx = idx - 1
-                
-        t_val = t_arr[idx]
-        rom_val = self.rom_data[idx]
-        vel_val = self.speed_data[idx]
-        spo2_val = self.spo2_data[idx]
-        
-        self.vLine_rom.setPos(t_val)
-        self.vLine_vel.setPos(t_val)
-        self.vLine_spo2.setPos(t_val)
-        self.hLine_rom.setPos(rom_val)
-        self.hLine_vel.setPos(vel_val)
-        self.hLine_spo2.setPos(spo2_val)
-        
-        # Calculate dynamic anchors to prevent text from disappearing off-screen
-        x_range = self.plot_rom.viewRange()[0]
-        y_range_rom = self.plot_rom.viewRange()[1]
-        y_range_vel = self.plot_vel.viewRange()[1]
-        y_range_spo2 = self.plot_spo2.viewRange()[1]
+    def _toggle_maximize(self, idx):
+        if self._maximized_idx == idx:
+            # Restore side-by-side
+            self.panel_rom.setVisible(True)
+            self.panel_force.setVisible(True)
+            self.panel_rom.set_maximized(False)
+            self.panel_force.set_maximized(False)
+            self.hero_splitter.setSizes([600, 600])
+            self._maximized_idx = None
+        else:
+            if idx == 0:
+                self.panel_rom.setVisible(True)
+                self.panel_force.setVisible(False)
+                self.panel_rom.set_maximized(True)
+                self.panel_force.set_maximized(False)
+            else:
+                self.panel_rom.setVisible(False)
+                self.panel_force.setVisible(True)
+                self.panel_rom.set_maximized(False)
+                self.panel_force.set_maximized(True)
+            self._maximized_idx = idx
 
-        # Horizontal: flip text to left side of crosshair if past the midway point
-        anchor_x = 1 if t_val > x_range[0] + (x_range[1] - x_range[0]) / 2 else 0
-        
-        # Vertical ROM: draw above point if in lower half, below if in upper half
-        anchor_y_rom = 1 if rom_val < y_range_rom[0] + (y_range_rom[1] - y_range_rom[0]) / 2 else 0
-        
-        # Vertical Vel: draw above point if in lower half, below if in upper half
-        anchor_y_vel = 1 if vel_val < y_range_vel[0] + (y_range_vel[1] - y_range_vel[0]) / 2 else 0
+    def _on_resistance_changed(self, val):
+        self.line_target_force.setPos(val)
+        self.lbl_target_force_line.setPos(155, val)
+        self.lbl_target_force_line.setText(f"Target Load: {val:.1f} lbs")
+        self.plot_force.setYRange(0, max(25.0, val * 1.6), padding=0)
+        if self.last_deficit_angle is None:
+            self.lbl_hud_deficit_sub.setText(f"Target: {val:.1f} lbs")
 
-        # Vertical SpO2: draw above point if in lower half, below if in upper half
-        anchor_y_spo2 = 1 if spo2_val < y_range_spo2[0] + (y_range_spo2[1] - y_range_spo2[0]) / 2 else 0
-
-        self.label_rom.setAnchor((anchor_x, anchor_y_rom))
-        self.label_rom.setText(f"Time: {t_val:.1f}s\nROM: {rom_val:.1f}°")
-        self.label_rom.setPos(t_val, rom_val)
-        
-        self.label_vel.setAnchor((anchor_x, anchor_y_vel))
-        self.label_vel.setText(f"Time: {t_val:.1f}s\nVel: {vel_val:.1f}°/s")
-        self.label_vel.setPos(t_val, vel_val)
-
-        self.label_spo2.setAnchor((anchor_x, anchor_y_spo2))
-        self.label_spo2.setText(f"Time: {t_val:.1f}s\nSpO2: {spo2_val:.1f}%")
-        self.label_spo2.setPos(t_val, spo2_val)
+    def _zero_encoder(self):
+        """Sends ZERO command to tare Nucleo rotary encoder and resets GUI baseline."""
+        if self.hw.is_connected:
+            self.hw.zero()
+        self._angle_zero_offset = self.hw.last_angle if self.hw.is_connected else 0.0
+        self.max_session_rom = 0.0
+        self.lbl_hud_rom.setText("0.0°")
+        self.lbl_hud_rom_sub.setText("Current: 0.0°")
+        self.lbl_status.setText("ENCODER TARE: 0.0°")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['info']}; font-size: 15px; font-weight: bold;")
 
     def _setup_timer(self):
-        """Create high-precision QTimer for smooth 60 FPS live data updates."""
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.PreciseTimer)
-        self.timer.setInterval(int(self.dt * 1000))  # 16ms
+        self.timer.setInterval(int(self.dt * 1000))  # 16ms ~ 60 FPS
         self.timer.timeout.connect(self._update_data)
 
     def setup(self, client_id):
-        """Prepare the screen for a new test."""
         self.client_id = client_id
         self._reset()
 
     def _reset(self):
-        """Reset all data and graphs."""
+        """Reset all data buffers, metrics, and graphs."""
         self.is_running = False
         self.elapsed_time = 0.0
         self._hw_start_ms = None
-        self.time_data = []
-        self.rom_data = []
-        self.speed_data = []
-        self.spo2_data = []
         self.session_id = None
         self.generator = None
         self.ticks = 0
@@ -412,36 +659,63 @@ class LiveTestScreen(QWidget):
         self.full_time_data = []
         self.full_rom_data = []
         self.full_speed_data = []
+        self.full_force_data = []
         self.full_spo2_data = []
 
+        self.time_data = []
+        self.rom_data = []
+        self.speed_data = []
+        self.force_data = []
+        self.spo2_data = []
+
+        self.reps_count = 0
+        self.max_session_rom = 0.0
+        self.therapy_work_j = 0.0
+        self.last_deficit_angle = None
+        self.last_deficit_force = None
+        self.rep_state = "EXTENDED"
+        self.rep_rom_buf = []
+        self.rep_force_buf = []
+        self.session_baseline_rom = 0.0
+
         self.curve_rom.setData([], [])
-        self.curve_vel.setData([], [])
-        self.curve_spo2.setData([], [])
+        self.curve_force_live.setData([], [])
+        self.deficit_marker.setData([], [])
+        self.deficit_callout.setText("")
+
+        self.lbl_hud_reps.setText("0 Reps")
+        self.lbl_hud_reps_sub.setText("Target: 10 Reps")
+        self.lbl_hud_rom.setText("0.0°")
+        self.lbl_hud_rom_sub.setText("Current: 0.0°")
+        self.lbl_hud_deficit.setText("Full Strength")
+        self.lbl_hud_deficit.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {COLORS['accent']};")
+        self.lbl_hud_deficit_sub.setText(f"Target: {self.spin_resistance.value():.1f} lbs")
+        self.lbl_hud_work.setText("0 J")
+        self.lbl_hud_spo2.setText("98%")
 
         self.lbl_timer.setText("0.0 s")
         self.lbl_status.setText("IDLE")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 16px; font-weight: bold;")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 15px; font-weight: bold;")
+
         self.btn_start_stop.setText("Start Test")
         self.btn_start_stop.setStyleSheet(f"""
             QPushButton {{
-                font-size: 18px;
+                font-size: 16px;
+                font-weight: bold;
                 background-color: {COLORS['accent_dark']};
                 border: 2px solid {COLORS['accent']};
-                border-radius: 12px;
+                border-radius: 8px;
+                color: white;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['accent']};
             }}
         """)
         self.btn_start_stop.setVisible(True)
-        self.save_discard_bar.setVisible(False)
+        self.btn_save.setVisible(False)
+        self.btn_discard.setVisible(False)
         self.spin_resistance.setEnabled(True)
-
-        # Reset default ranges
-        self.plot_rom.setXRange(0, self.time_window, padding=0)
-        self.plot_rom.setYRange(-10, 180, padding=0)
-        self.plot_vel.setYRange(-400, 400, padding=0)
-        self.plot_spo2.setYRange(92, 100, padding=0)
+        self.btn_zero.setEnabled(True)
 
     def _toggle_test(self):
         if self.is_running:
@@ -450,45 +724,52 @@ class LiveTestScreen(QWidget):
             self._start_test()
 
     def _start_test(self):
-        """Begin a live test session."""
         target_resistance = self.spin_resistance.value()
-
-        # Initialize generator (ROM is derived from data, not a target)
-        self.generator = LiveDataGenerator(
-            target_resistance=target_resistance,
-        )
-
-        # Update strength label
-        self.lbl_strength.setText(f"{target_resistance:.1f} lbs")
+        self.generator = LiveDataGenerator(target_resistance=target_resistance)
+        self._on_resistance_changed(target_resistance)
 
         self.is_running = True
         self.spin_resistance.setEnabled(False)
-        self.save_discard_bar.setVisible(False)
+        self.btn_zero.setEnabled(False)
+        self.btn_save.setVisible(False)
+        self.btn_discard.setVisible(False)
 
-        # Clear previous data
+        # Clear buffers
         self.full_time_data = []
         self.full_rom_data = []
         self.full_speed_data = []
+        self.full_force_data = []
         self.full_spo2_data = []
 
         self.time_data = []
         self.rom_data = []
         self.speed_data = []
+        self.force_data = []
         self.spo2_data = []
+
+        self.reps_count = 0
+        self.max_session_rom = 0.0
+        self.therapy_work_j = 0.0
+        self.last_deficit_angle = None
+        self.last_deficit_force = None
+        self.rep_state = "EXTENDED"
+        self.rep_rom_buf = []
+        self.rep_force_buf = []
+        self.session_baseline_rom = 0.0
+
         self._start_time = time.time()
         self.elapsed_time = 0.0
         self.ticks = 0
         self._hw_start_ms = None
 
-        self.lbl_status.setText("RECORDING")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 16px; font-weight: bold;")
         self.btn_start_stop.setText("Stop Test")
         self.btn_start_stop.setStyleSheet(f"""
             QPushButton {{
-                font-size: 18px;
+                font-size: 16px;
+                font-weight: bold;
                 background-color: #5c1a1a;
                 border: 2px solid {COLORS['danger']};
-                border-radius: 12px;
+                border-radius: 8px;
                 color: {COLORS['danger']};
             }}
             QPushButton:hover {{
@@ -497,177 +778,256 @@ class LiveTestScreen(QWidget):
             }}
         """)
 
-        # Connect and command hardware stream if available
-        ok, msg = self.hw.connect()
+        ok, _ = self.hw.connect()
         if ok:
             self.hw.start_streaming()
             self.lbl_status.setText("RECORDING (STM32 Live)")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: bold;")
         else:
             self.lbl_status.setText("RECORDING (Simulated)")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: bold;")
 
         self.timer.start()
 
     def _stop_test(self):
-        """Stop the live test — show save/discard options."""
         self.timer.stop()
         self.is_running = False
 
         if self.hw.is_connected:
             self.hw.stop_streaming()
 
-        self.lbl_status.setText("STOPPED - Save or Discard?")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 16px; font-weight: bold;")
+        self.lbl_status.setText("TEST COMPLETE — Save or Discard?")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 15px; font-weight: bold;")
 
-        # Hide start/stop, show save/discard
         self.btn_start_stop.setVisible(False)
-        self.save_discard_bar.setVisible(True)
+        self.btn_save.setVisible(True)
+        self.btn_discard.setVisible(True)
         self.spin_resistance.setEnabled(False)
+        self.btn_zero.setEnabled(True)
 
     def _save_test(self):
-        """Save the test data to the database."""
         if not self.full_time_data:
             self._discard_test()
             return
 
         target_resistance = self.spin_resistance.value()
-        # Calculate observed max ROM from the data
-        observed_max_rom = max(self.full_rom_data) if self.full_rom_data else 0.0
+        observed_max_rom = self.max_session_rom if self.max_session_rom > 0 else (max(self.full_rom_data) if self.full_rom_data else 0.0)
 
-        # Create session and save data
+        deficit_str = f"Stall at {self.last_deficit_angle:.1f}° ({self.last_deficit_force:.1f} lbs)" if self.last_deficit_angle else "Full Strength"
+        notes = f"Reps: {self.reps_count} | Peak ROM: {observed_max_rom:.1f}° | Deficit: {deficit_str} | Work: {self.therapy_work_j:.0f} J"
+
         session_id = self.db.create_session(
-            self.client_id, target_resistance, round(observed_max_rom, 1)
+            self.client_id, target_resistance, round(observed_max_rom, 1), notes=notes
         )
-        strength_data = [target_resistance] * len(self.full_time_data)
         self.db.save_test_data_batch(
             session_id,
             self.full_time_data,
             self.full_rom_data,
             self.full_speed_data,
-            strength_data,
+            self.full_force_data,
             self.full_spo2_data,
         )
         self.db.complete_session(session_id)
 
-        self.lbl_status.setText("SAVED")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 16px; font-weight: bold;")
-        self.save_discard_bar.setVisible(False)
+        self.lbl_status.setText("SAVED TO DATABASE")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 15px; font-weight: bold;")
+        self.btn_save.setVisible(False)
+        self.btn_discard.setVisible(False)
         self.btn_start_stop.setVisible(True)
         self.btn_start_stop.setText("Start New Test")
         self.btn_start_stop.setStyleSheet(f"""
             QPushButton {{
-                font-size: 18px;
+                font-size: 16px;
+                font-weight: bold;
                 background-color: {COLORS['accent_dark']};
                 border: 2px solid {COLORS['accent']};
-                border-radius: 12px;
+                border-radius: 8px;
+                color: white;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['accent']};
             }}
         """)
         self.spin_resistance.setEnabled(True)
+        self.btn_zero.setEnabled(True)
 
         self.test_completed.emit(session_id)
 
     def _discard_test(self):
-        """Discard the test data without saving."""
         self.lbl_status.setText("DISCARDED")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 16px; font-weight: bold;")
-        self.save_discard_bar.setVisible(False)
+        self.lbl_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 15px; font-weight: bold;")
+        self.btn_save.setVisible(False)
+        self.btn_discard.setVisible(False)
         self.btn_start_stop.setVisible(True)
         self.btn_start_stop.setText("Start New Test")
         self.btn_start_stop.setStyleSheet(f"""
             QPushButton {{
-                font-size: 18px;
+                font-size: 16px;
+                font-weight: bold;
                 background-color: {COLORS['accent_dark']};
                 border: 2px solid {COLORS['accent']};
-                border-radius: 12px;
+                border-radius: 8px;
+                color: white;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['accent']};
             }}
         """)
         self.spin_resistance.setEnabled(True)
+        self.btn_zero.setEnabled(True)
+        self._reset()
 
-        # Clear buffers
-        self._hw_start_ms = None
-        self.full_time_data = []
-        self.full_rom_data = []
-        self.full_speed_data = []
-        self.full_spo2_data = []
-
-        self.time_data = []
-        self.rom_data = []
-        self.speed_data = []
-        self.spo2_data = []
-
-    def _append_sample(self, t_val, rom, speed, spo2):
+    def _append_sample(self, t_val, rom, speed, force, spo2):
         self.full_time_data.append(t_val)
         self.full_rom_data.append(rom)
         self.full_speed_data.append(speed)
+        self.full_force_data.append(force)
         self.full_spo2_data.append(spo2)
 
         self.time_data.append(t_val)
         self.rom_data.append(rom)
         self.speed_data.append(speed)
+        self.force_data.append(force)
         self.spo2_data.append(spo2)
         self.ticks += 1
+        self.current_spo2 = spo2
 
-        # Rolling window
+        # Rolling window for time plot
         if len(self.time_data) > self.MAX_POINTS:
             self.time_data = self.time_data[-self.MAX_POINTS:]
             self.rom_data = self.rom_data[-self.MAX_POINTS:]
             self.speed_data = self.speed_data[-self.MAX_POINTS:]
+            self.force_data = self.force_data[-self.MAX_POINTS:]
             self.spo2_data = self.spo2_data[-self.MAX_POINTS:]
 
+        # Latch true physiological peak ROM (preventing uncalibrated spin away)
+        clamped_rom = max(0.0, min(180.0, rom))
+        if clamped_rom > self.max_session_rom:
+            self.max_session_rom = clamped_rom
+
+        # Mechanical Work Integration (Concentric phase)
+        if len(self.full_rom_data) >= 2:
+            d_rom = self.full_rom_data[-1] - self.full_rom_data[-2]
+            if d_rom > 0 and speed > 5.0:
+                d_s = 0.3048 * (d_rom * np.pi / 180.0)
+                f_newtons = force * 4.44822
+                self.therapy_work_j += f_newtons * d_s
+
+        # Adaptive Repetition State Machine
+        target_r = self.spin_resistance.value()
+        if not hasattr(self, 'current_rep_peak'):
+            self.current_rep_peak = 0.0
+
+        if self.rep_state in ("EXTENDED", "IDLE"):
+            if rom < self.session_baseline_rom or self.ticks <= 5:
+                self.session_baseline_rom = rom
+
+            if rom > (self.session_baseline_rom + 25.0) and speed > 10.0:
+                self.rep_state = "FLEXING"
+                self.current_rep_peak = rom
+                self.rep_rom_buf = [rom]
+                self.rep_force_buf = [force]
+        elif self.rep_state == "FLEXING":
+            self.rep_rom_buf.append(rom)
+            self.rep_force_buf.append(force)
+            if rom > self.current_rep_peak:
+                self.current_rep_peak = rom
+            # Detect apex: excursion >= 30 deg and arm starts returning
+            if (self.current_rep_peak - self.session_baseline_rom) >= 30.0 and speed < -8.0:
+                self.rep_state = "EXTENDING"
+        elif self.rep_state == "EXTENDING":
+            # Rep completed when arm returns near baseline extension or below 35 deg
+            if rom <= max(35.0, self.session_baseline_rom + 15.0):
+                self.reps_count += 1
+                self.rep_state = "EXTENDED"
+
+                # Analyze concentric buffer for force deficit valley
+                if self.rep_rom_buf:
+                    r_arr = np.array(self.rep_rom_buf)
+                    f_arr = np.array(self.rep_force_buf)
+                    mask = (r_arr >= 40.0) & (r_arr <= 110.0)
+                    if np.any(mask):
+                        mid_f = f_arr[mask]
+                        mid_r = r_arr[mask]
+                        min_idx = np.argmin(mid_f)
+                        min_force = float(mid_f[min_idx])
+                        min_angle = float(mid_r[min_idx])
+                        if min_force < target_r * 0.80:
+                            self.last_deficit_angle = min_angle
+                            self.last_deficit_force = min_force
+                        else:
+                            self.last_deficit_angle = None
+                            self.last_deficit_force = None
+                self.rep_rom_buf = []
+                self.rep_force_buf = []
+
     def _update_data(self):
-        """Called every timer tick to read hardware or generate simulated data."""
         self.elapsed_time = time.time() - self._start_time
         new_data = False
+        target_r = self.spin_resistance.value()
 
         if self.hw.is_connected:
             samples = self.hw.read_samples()
             if samples:
-                for t_ms, _, rom, speed, *rest in samples:
+                for t_ms, _, rom, speed, load, *rest in samples:
                     if self._hw_start_ms is None:
                         self._hw_start_ms = t_ms
                     sample_time = (t_ms - self._hw_start_ms) / 1000.0
-                    spo2 = self.generator.next_sample(sample_time)[2] if self.generator else 98.0
-                    self._append_sample(sample_time, rom, speed, spo2)
+                    force_val = float(load) if load > 0.5 else target_r
+                    self._append_sample(sample_time, rom, speed, force_val, 98.0)
                 new_data = True
             elif not self.time_data:
-                # Initial point if no data arrived yet
-                self._append_sample(0.0, self.hw.last_angle, self.hw.last_velocity, 98.0)
+                self._append_sample(0.0, self.hw.last_angle, self.hw.last_velocity, target_r, 98.0)
                 new_data = True
         elif self.generator:
-            rom, speed, spo2 = self.generator.next_sample(self.elapsed_time)
-            self._append_sample(self.elapsed_time, rom, speed, spo2)
+            rom, speed, force_val, spo2 = self.generator.next_sample(self.elapsed_time)
+            self._append_sample(self.elapsed_time, rom, speed, force_val, spo2)
             new_data = True
 
-        # Render whenever new data arrives for smooth 60 FPS plotting without artificial throttling
         if new_data and self.time_data:
             t = np.array(self.time_data)
-            
-            # Update stacked plots
-            self.curve_rom.setData(t, np.array(self.rom_data))
-            self.curve_vel.setData(t, np.array(self.speed_data))
-    
-            # Update SpO2 vs Time
-            self.curve_spo2.setData(t, np.array(self.spo2_data))
-    
-            # Scroll X axis smoothly following the latest data point
-            current_t = self.time_data[-1]
-            if current_t > self.time_window:
-                x_min = current_t - self.time_window
-                x_max = current_t
+            rom_arr = np.array(self.rom_data)
+            force_arr = np.array(self.force_data)
+
+            # 1. Update Hero Plot 1: ROM vs. Time
+            if self.panel_rom.isVisible():
+                self.curve_rom.setData(t, rom_arr)
+                current_t = self.time_data[-1]
+                if current_t > self.time_window:
+                    x_min = current_t - self.time_window
+                    x_max = current_t
+                else:
+                    x_min = 0.0
+                    x_max = self.time_window
+                self.plot_rom.setXRange(x_min, x_max, padding=0)
+
+            # 2. Update Hero Plot 2: Force vs. Joint Angle
+            if self.panel_force.isVisible():
+                recent_pts = min(len(rom_arr), 300)
+                self.curve_force_live.setData(rom_arr[-recent_pts:], force_arr[-recent_pts:])
+                if self.last_deficit_angle is not None:
+                    self.deficit_marker.setData([self.last_deficit_angle], [self.last_deficit_force])
+                    self.deficit_callout.setPos(self.last_deficit_angle, self.last_deficit_force)
+                    self.deficit_callout.setText(f"Stall: {self.last_deficit_angle:.1f}° ({self.last_deficit_force:.1f} lbs)")
+                else:
+                    self.deficit_marker.setData([], [])
+                    self.deficit_callout.setText("")
+
+            # Update HUD Cards
+            self.lbl_hud_reps.setText(f"{self.reps_count} Reps")
+            self.lbl_hud_rom.setText(f"{self.max_session_rom:.1f}°")
+            self.lbl_hud_rom_sub.setText(f"Current: {rom_arr[-1]:.1f}°")
+            self.lbl_hud_work.setText(f"{self.therapy_work_j:.0f} J")
+            self.lbl_hud_spo2.setText(f"{self.current_spo2:.0f}%")
+
+            if self.last_deficit_angle is not None:
+                self.lbl_hud_deficit.setText(f"Stall at {self.last_deficit_angle:.1f}°")
+                self.lbl_hud_deficit.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {COLORS['warning']};")
+                self.lbl_hud_deficit_sub.setText(f"{self.last_deficit_force:.1f} lbs / {target_r:.1f} lbs")
             else:
-                x_min = 0.0
-                x_max = self.time_window
-                
-            self.plot_rom.setXRange(x_min, x_max, padding=0)
-            # self.plot_vel is XLinked to self.plot_rom, so it scrolls automatically
-            self.plot_spo2.setXRange(x_min, x_max, padding=0)
-    
-            # Update timer label
-            self.lbl_timer.setText(f"{current_t:.1f} s")
+                self.lbl_hud_deficit.setText("Full Strength")
+                self.lbl_hud_deficit.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {COLORS['accent']};")
+                self.lbl_hud_deficit_sub.setText(f"Target: {target_r:.1f} lbs")
 
-
+            # Update timer
+            self.lbl_timer.setText(f"{self.time_data[-1]:.1f} s")
