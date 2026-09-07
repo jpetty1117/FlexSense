@@ -21,24 +21,72 @@ The benchtop test device integrates mechanical resistance actuation with multi-m
 
 ---
 
-## Hardware Architecture
+## Firmware Architecture ([firmware/](file:///home/jpetty/squish-therapy/firmware))
 
-- **Microcontroller:** STM32F401RE Nucleo
-- **Encoder Interface:** 
-  - Phase A: `PA0` (TIM2_CH1)
-  - Phase B: `PA1` (TIM2_CH2)
-  - Mode: 4X Hardware Quadrature Counter (`__HAL_TIM_GET_COUNTER`)
-- **Telemetry Stream:** 100 Hz binary packets over ST-Link USB CDC-ACM at 115200 baud
-- **Packet Structure (24 Bytes):**
-  - Magic Header: `0xAA 0x55`
-  - Payload: Timestamp (`uint32`), Joint Angle (`float`), Angular Velocity (`float`), Handle Force (`float`), Motor Current Iq (`float`)
-  - Checksum: CRC-16-CCITT across header and payload
+The embedded firmware runs on an **STM32F401RE Nucleo** board, structured around an executive state machine and encapsulated subsystem drivers complying with **Texas A&M ESET-469 Rev 3.0** coding standards.
+
+### Directory Layout
+
+```
+firmware/
+├── platformio.ini          # PlatformIO build and flash configuration
+├── encoder.ioc             # STM32CubeMX peripheral & clock tree configuration
+├── .mxproject              # CubeMX project metadata
+├── monitor_binary.py       # Terminal CLI telemetry monitor
+├── Core/
+│   ├── Inc/
+│   │   ├── main.h          # CubeMX system definitions and HAL handles
+│   │   ├── encoder.h       # Rotary encoder kinematics & velocity filter API
+│   │   ├── telemetry.h     # 24-byte packed binary packet, CRC-16, command parser API
+│   │   ├── load_cell.h     # Handle load cell force acquisition & tare API
+│   │   ├── motor.h         # Motor resistance torque & FOC current API
+│   │   └── spo2.h          # Pulse oximeter & heart rate biometric API
+│   └── Src/
+│       ├── main.c          # Executive state machine & 10ms real-time control loop
+│       ├── encoder.c       # TIM2 4X quadrature decoder, 40ms sliding window EMA filter
+│       ├── telemetry.c     # Non-blocking UART command parser, CRC-16, binary transmitter
+│       ├── load_cell.c     # Handle load cell driver skeleton
+│       ├── motor.c         # Motor resistance torque driver skeleton
+│       └── spo2.c          # SpO2 pulse oximeter driver skeleton
+└── Drivers/                # STM32 HAL and CMSIS library drivers
+```
+
+### Module Responsibilities
+
+| Module | Files | Responsibility |
+| :--- | :--- | :--- |
+| **Executive** | `main.c` | Top-level state machine (`IDLE`, `STREAMING`), subsystem initialization, and 10ms periodic control scheduler. |
+| **Encoder** | `encoder.c`, `encoder.h` | TIM2 4X hardware decoding, $0.15^\circ$ resolution, 40ms circular windowed velocity filter, and EMA low-pass filtering. |
+| **Telemetry** | `telemetry.c`, `telemetry.h` | Non-blocking command parsing (`START`, `STOP`, `ZERO`, `STATUS`), CRC-16-CCITT integrity checks, and 24-byte packed binary packet transmission. |
+| **Load Cell** | `load_cell.c`, `load_cell.h` | Calibration, tare offsets, and instantaneous handle contact force acquisition (lbs / Newtons). |
+| **Motor Drive** | `motor.c`, `motor.h` | Isotonic resistance torque commands, quadrature current feedback ($I_q$), and emergency braking. |
+| **SpO2 Vitals** | `spo2.c`, `spo2.h` | Blood oxygen saturation (%) and heart rate (BPM) biometric acquisition via I2C (MAX30102). |
+
+### CubeMX & PlatformIO Integration
+
+- **STM32CubeMX:** Used for pinout, clock tree, and peripheral HAL generation (`encoder.ioc`). Custom files in `Core/Inc` and `Core/Src` are preserved across code re-generations.
+- **PlatformIO:** Automatically compiles all `.c` files in `Core/Src` and includes `Core/Inc`. No separate file list configuration is needed.
 
 ---
 
 ## Quick Start
 
-### 1. Desktop GUI (Laptop)
+### Unified Runner (Root Directory)
+
+The top-level [`run.sh`](file:///home/jpetty/squish-therapy/run.sh) manages both GUI startup and firmware flashing:
+
+```bash
+# Launch the Desktop GUI immediately (default)
+./run.sh
+
+# Build & flash STM32 firmware over ST-Link USB, then launch GUI
+./run.sh --flash    # (or ./run.sh -f)
+
+# Compile-check firmware only (PlatformIO)
+./run.sh --build-fw # (or ./run.sh -b)
+```
+
+### 1. Desktop GUI (Manual / Subdirectory)
 
 Requires Python 3.10+ (dependencies: `PySide6`, `pyqtgraph`, `pyserial`, `numpy`).
 
@@ -48,7 +96,7 @@ cd gui
 # First-time setup (creates virtual environment and installs dependencies)
 ./setup.sh
 
-# Run the app
+# Run the app directly
 ./run.sh
 ```
 
@@ -57,9 +105,12 @@ cd gui
 Built and uploaded using PlatformIO with the STM32Cube framework:
 
 ```bash
-cd firmware/encoder
+cd firmware
 
-# Build and flash via USB ST-Link
+# Build firmware
+~/.platformio/penv/bin/pio run
+
+# Flash to Nucleo board via ST-Link USB
 ~/.platformio/penv/bin/pio run -t upload
 ```
 
@@ -68,5 +119,5 @@ cd firmware/encoder
 To verify live sensor packets in the terminal without opening the full GUI:
 
 ```bash
-./firmware/encoder/monitor_binary.py
+./firmware/monitor_binary.py
 ```
