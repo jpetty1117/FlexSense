@@ -44,8 +44,8 @@ class STM32EncoderInterface:
     """Manages serial communication and binary packet framing with the STM32."""
 
     PACKET_PREAMBLE = b"\xAA\x55"
-    PACKET_SIZE = 24  # 2 preamble + 4 time + 4 angle + 4 vel + 4 load + 4 iq + 2 crc
-    PACKET_FORMAT = "<BB I f f f f H"
+    PACKET_SIZE = 28  # 2 preamble + 4 time + 4 angle + 4 vel + 4 load + 4 iq + 4 spo2 + 2 crc
+    PACKET_FORMAT = "<BB I f f f f f H"
 
     def __init__(self, port=None, baudrate=115200):
         self.port = port
@@ -61,6 +61,7 @@ class STM32EncoderInterface:
         self.last_velocity = 0.0
         self.last_load_cell = 0.0
         self.last_motor_iq = 0.0
+        self.last_spo2 = 98.0
 
     @staticmethod
     def find_serial_port():
@@ -150,8 +151,8 @@ class STM32EncoderInterface:
 
     def read_samples(self):
         """
-        Non-blocking read and unpack of all newly arrived 24-byte binary packets.
-        Returns a list of tuples: [(time_ms, ticks, angle_deg, vel_deg_s, load_cell, motor_iq), ...]
+        Non-blocking read and unpack of all newly arrived 28-byte binary packets.
+        Returns a list of tuples: [(time_ms, ticks, angle_deg, vel_deg_s, load_cell, motor_iq, spo2), ...]
         """
         if not self.is_connected or not self.ser:
             return []
@@ -179,16 +180,16 @@ class STM32EncoderInterface:
                 if len(self.rx_buffer) < self.PACKET_SIZE:
                     break
 
-                # Extract candidate 24-byte packet
+                # Extract candidate 28-byte packet
                 pkt_bytes = bytes(self.rx_buffer[:self.PACKET_SIZE])
                 del self.rx_buffer[:self.PACKET_SIZE]
 
-                # Verify CRC16-CCITT across bytes 0..21
+                # Verify CRC16-CCITT across bytes 0..25
                 expected_crc = struct.unpack("<H", pkt_bytes[-2:])[0]
                 calculated_crc = compute_crc16(pkt_bytes[:-2])
 
                 if calculated_crc == expected_crc:
-                    p0, p1, t_ms, angle, vel, load, iq, crc = struct.unpack(
+                    p0, p1, t_ms, angle, vel, load, iq, spo2, crc = struct.unpack(
                         self.PACKET_FORMAT, pkt_bytes
                     )
 
@@ -197,9 +198,10 @@ class STM32EncoderInterface:
                     self.last_velocity = vel
                     self.last_load_cell = load
                     self.last_motor_iq = iq
+                    self.last_spo2 = spo2
 
                     # Return formatted sample tuple
-                    samples.append((t_ms, 0, angle, vel, load, iq))
+                    samples.append((t_ms, 0, angle, vel, load, iq, spo2))
                 else:
                     # CRC error: preamble was a false positive, advance by 1 to re-sync
                     self.rx_buffer.insert(0, pkt_bytes[1])

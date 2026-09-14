@@ -109,7 +109,7 @@ int main(void)
 
   Telemetry_SendAck("\r\n=== STM32F401RE FlexSense Embedded System Ready ===\r\n");
   Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS\r\n");
-  Telemetry_SendAck("Packet: 24B [0xAA 0x55, time_u32, ang_f, vel_f, load_f, iq_f, crc16_u16]\r\n");
+  Telemetry_SendAck("Packet: 28B [0xAA 0x55, time_u32, ang_f, vel_f, load_f, effort_f, spo2_f, crc16_u16]\r\n");
 
   s_sys_state = SYS_STATE_IDLE;
   s_last_tick = HAL_GetTick();
@@ -162,7 +162,7 @@ int main(void)
       /* Update kinematics differentiation */
       Encoder_UpdateVelocity(now);
 
-      /* In STREAMING state, transmit 24-byte binary telemetry frame */
+      /* In STREAMING state, transmit 28-byte binary telemetry frame */
       if ( s_sys_state == SYS_STATE_STREAMING )
       {
         TelemetryPacket_t pkt;
@@ -171,6 +171,7 @@ int main(void)
         pkt.velocity_deg_s = Encoder_GetVelocityDegS();
         pkt.load_cell      = LoadCell_ReadForceLbs();
         pkt.motor_iq_a     = Motor_GetIqCurrent();
+        pkt.spo2           = SpO2_ReadPercent();
 
         Telemetry_SendPacket(&pkt);
       }

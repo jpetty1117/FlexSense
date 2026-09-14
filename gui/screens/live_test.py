@@ -266,7 +266,7 @@ class LiveTestScreen(QWidget):
         params_form = QFormLayout()
         params_form.setSpacing(6)
         self.spin_resistance = QDoubleSpinBox()
-        self.spin_resistance.setRange(1.0, 100.0)
+        self.spin_resistance.setRange(1.0, 15.0)
         self.spin_resistance.setValue(10.0)
         self.spin_resistance.setSuffix(" lbs")
         self.spin_resistance.setMinimumHeight(34)
@@ -969,15 +969,20 @@ class LiveTestScreen(QWidget):
         if self.hw.is_connected:
             samples = self.hw.read_samples()
             if samples:
-                for t_ms, _, rom, speed, load, *rest in samples:
+                for sample in samples:
+                    t_ms = sample[0]
+                    rom = sample[2]
+                    speed = sample[3]
+                    load = sample[4]
+                    spo2 = float(sample[6]) if len(sample) > 6 else 98.0
                     if self._hw_start_ms is None:
                         self._hw_start_ms = t_ms
                     sample_time = (t_ms - self._hw_start_ms) / 1000.0
                     force_val = float(load) if load > 0.5 else target_r
-                    self._append_sample(sample_time, rom, speed, force_val, 98.0)
+                    self._append_sample(sample_time, rom, speed, force_val, spo2)
                 new_data = True
             elif not self.time_data:
-                self._append_sample(0.0, self.hw.last_angle, self.hw.last_velocity, target_r, 98.0)
+                self._append_sample(0.0, self.hw.last_angle, self.hw.last_velocity, target_r, getattr(self.hw, 'last_spo2', 98.0))
                 new_data = True
         elif self.generator:
             rom, speed, force_val, spo2 = self.generator.next_sample(self.elapsed_time)

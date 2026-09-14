@@ -7,7 +7,7 @@ Author: Squish Therapy
 File: monitor_binary.py
 --------
 Command-line terminal monitor for decoding and displaying live 100 Hz
-24-byte binary telemetry packets from the STM32F401RE FlexSense encoder.
+28-byte binary telemetry packets from the STM32F401RE FlexSense encoder.
 """
 
 import sys
@@ -62,8 +62,8 @@ def main():
     # Send START
     ser.write(b"START\r\n")
     print("Sent START. Streaming binary packets (Press Ctrl+C to stop)...\n")
-    print(f"{'Time (ms)':<10} {'Angle (deg)':<14} {'Velocity (deg/s)':<18} {'Load':<8} {'Iq (A)':<8} {'CRC':<8}")
-    print("-" * 70)
+    print(f"{'Time (ms)':<10} {'Angle (deg)':<14} {'Velocity (deg/s)':<18} {'Load':<8} {'Effort':<8} {'SpO2 (%)':<10} {'CRC':<8}")
+    print("-" * 80)
 
     buf = bytearray()
     try:
@@ -72,23 +72,23 @@ def main():
             if chunk:
                 buf.extend(chunk)
 
-            while len(buf) >= 24:
+            while len(buf) >= 28:
                 idx = buf.find(b"\xAA\x55")
                 if idx == -1:
                     del buf[:-1]
                     break
                 if idx > 0:
                     del buf[:idx]
-                if len(buf) < 24:
+                if len(buf) < 28:
                     break
 
-                pkt = bytes(buf[:24])
-                del buf[:24]
+                pkt = bytes(buf[:28])
+                del buf[:28]
 
                 expected_crc = struct.unpack("<H", pkt[-2:])[0]
                 if compute_crc16(pkt[:-2]) == expected_crc:
-                    _, _, t_ms, angle, vel, load, iq, crc = struct.unpack("<BB I f f f f H", pkt)
-                    print(f"{t_ms:<10} {angle:<14.2f} {vel:<18.1f} {load:<8.1f} {iq:<8.1f} {hex(crc):<8}")
+                    _, _, t_ms, angle, vel, load, iq, spo2, crc = struct.unpack("<BB I f f f f f H", pkt)
+                    print(f"{t_ms:<10} {angle:<14.2f} {vel:<18.1f} {load:<8.1f} {iq:<8.1f} {spo2:<10.1f} {hex(crc):<8}")
                 else:
                     buf.insert(0, pkt[1])
     except KeyboardInterrupt:

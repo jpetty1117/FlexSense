@@ -5,7 +5,7 @@
   * ESET-469 Embedded Real Time Software Development
   * Author: Squish Therapy
   * File: motor.h
-  * Brief: Interface for rehabilitation resistance torque motor & FOC controller.
+  * Brief: Interface for rehabilitation resistance torque actuator (HAL).
   ******************************************************************************
   */
 

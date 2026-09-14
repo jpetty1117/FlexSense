@@ -100,7 +100,7 @@ SystemCommand_t Telemetry_PollCommand(void)
 } /* Telemetry_PollCommand() */
 
 /**
-  * @brief  Transmits a 24-byte binary telemetry packet with CRC16 over UART.
+  * @brief  Transmits a 28-byte binary telemetry packet with CRC16 over UART.
   * @param  pkt: Pointer to TelemetryPacket_t structure to send.
   * @retval None
   */

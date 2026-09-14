@@ -4,8 +4,9 @@
   * Electronic Systems Engineering Technology
   * ESET-469 Embedded Real Time Software Development
   * Author: Squish Therapy
-  * File: load_cell.c
-  * Brief: Implementation skeleton for handle load cell force acquisition.
+  * Brief: Hardware Abstraction Layer (HAL) for handle load cell force acquisition.
+  *        Supports off-the-shelf HX711 24-bit breakout (PB0/PB1) to eliminate
+  *        breadboard analog noise, or STM32 on-chip 12-bit ADC1.
   ******************************************************************************
   */
 

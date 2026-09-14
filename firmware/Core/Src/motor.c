@@ -5,7 +5,7 @@
   * ESET-469 Embedded Real Time Software Development
   * Author: Squish Therapy
   * File: motor.c
-  * Brief: Implementation skeleton for motor resistance torque & FOC drive.
+  * Brief: Implementation skeleton for torque actuator resistance HAL.
   ******************************************************************************
   */
 
@@ -17,7 +17,7 @@ static float s_feedback_iq_a = 0.0f;
 static bool  s_motor_enabled = false;
 
 /**
-  * @brief  Initialize PWM / CAN / UART communications with motor inverter driver.
+  * @brief  Initialize PWM / CAN / UART communications with torque actuator stage.
   * @param  None
   * @retval None
   */
@@ -40,9 +40,9 @@ void Motor_SetResistanceLbs(float resistance_lbs)
 } /* Motor_SetResistanceLbs() */
 
 /**
-  * @brief  Read instantaneous motor q-axis quadrature torque current in Amps.
+  * @brief  Read instantaneous torque actuator effort / drive current.
   * @param  None
-  * @retval float: Motor Iq current in Amperes.
+  * @retval float: Commanded or measured torque actuator effort.
   */
 float Motor_GetIqCurrent(void)
 {
@@ -50,7 +50,7 @@ float Motor_GetIqCurrent(void)
 } /* Motor_GetIqCurrent() */
 
 /**
-  * @brief  Instant safety disable of motor torque output.
+  * @brief  Instant safety disable of torque actuator output.
   * @param  None
   * @retval None
   */
@@ -61,7 +61,7 @@ void Motor_EmergencyStop(void)
 } /* Motor_EmergencyStop() */
 
 /**
-  * @brief  Query if motor controller is actively generating resistance torque.
+  * @brief  Query if torque actuator is actively generating resistance.
   * @param  None
   * @retval bool: True if enabled.
   */

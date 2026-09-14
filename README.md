@@ -1,6 +1,6 @@
 # FlexSense
 
-FlexSense is an active physical therapy and rehabilitation device for upper-limb strength training (specifically bicep curls). The machine uses a motor to impose controlled resistance torques on the user while logging biomechanical and physiological telemetry in real time to a desktop GUI on a connected laptop.
+FlexSense is an active physical therapy and rehabilitation device for upper-limb strength training (specifically bicep curls). The machine uses a torque actuator to impose controlled resistance on the user while logging biomechanical and physiological telemetry in real time to a desktop GUI on a connected laptop.
 
 ---
 
@@ -8,8 +8,8 @@ FlexSense is an active physical therapy and rehabilitation device for upper-limb
 
 The benchtop test device integrates mechanical resistance actuation with multi-modal patient monitoring:
 
-1. **Active Torque Actuation (Motor / FOC):**
-   Imposes programmable resistive torque on the exercise arm against the patient's bicep curl motion.
+1. **Controlled Torque Actuation:**
+   Imposes programmable resistive torque on the exercise arm against the patient's bicep curl motion (actuated based on the candidate hardware selected during final integration).
 2. **Handle Force Sensing (Load Cell):**
    A load cell mounted at the user grip handle measures the physical force exerted by the user throughout the curl.
 3. **Range of Motion & Kinematics (Rotary Encoder):**
@@ -37,16 +37,16 @@ firmware/
 │   ├── Inc/
 │   │   ├── main.h          # CubeMX system definitions and HAL handles
 │   │   ├── encoder.h       # Rotary encoder kinematics & velocity filter API
-│   │   ├── telemetry.h     # 24-byte packed binary packet, CRC-16, command parser API
+│   │   ├── telemetry.h     # 28-byte packed binary packet, CRC-16, command parser API
 │   │   ├── load_cell.h     # Handle load cell force acquisition & tare API
-│   │   ├── motor.h         # Motor resistance torque & FOC current API
+│   │   ├── motor.h         # Torque actuator driver API (HAL)
 │   │   └── spo2.h          # Pulse oximeter & heart rate biometric API
 │   └── Src/
 │       ├── main.c          # Executive state machine & 10ms real-time control loop
 │       ├── encoder.c       # TIM2 4X quadrature decoder, 40ms sliding window EMA filter
 │       ├── telemetry.c     # Non-blocking UART command parser, CRC-16, binary transmitter
 │       ├── load_cell.c     # Handle load cell driver skeleton
-│       ├── motor.c         # Motor resistance torque driver skeleton
+│       ├── motor.c         # Torque actuator resistance driver skeleton
 │       └── spo2.c          # SpO2 pulse oximeter driver skeleton
 └── Drivers/                # STM32 HAL and CMSIS library drivers
 ```
@@ -57,9 +57,9 @@ firmware/
 | :--- | :--- | :--- |
 | **Executive** | `main.c` | Top-level state machine (`IDLE`, `STREAMING`), subsystem initialization, and 10ms periodic control scheduler. |
 | **Encoder** | `encoder.c`, `encoder.h` | TIM2 4X hardware decoding, $0.15^\circ$ resolution, 40ms circular windowed velocity filter, and EMA low-pass filtering. |
-| **Telemetry** | `telemetry.c`, `telemetry.h` | Non-blocking command parsing (`START`, `STOP`, `ZERO`, `STATUS`), CRC-16-CCITT integrity checks, and 24-byte packed binary packet transmission. |
+| **Telemetry** | `telemetry.c`, `telemetry.h` | Non-blocking command parsing (`START`, `STOP`, `ZERO`, `STATUS`), CRC-16-CCITT integrity checks, and 28-byte packed binary packet transmission. |
 | **Load Cell** | `load_cell.c`, `load_cell.h` | Calibration, tare offsets, and instantaneous handle contact force acquisition (lbs / Newtons). |
-| **Motor Drive** | `motor.c`, `motor.h` | Isotonic resistance torque commands, quadrature current feedback ($I_q$), and emergency braking. |
+| **Torque Actuator** | `motor.c`, `motor.h` | Isotonic resistance torque commands, actuator effort feedback, and emergency braking HAL. |
 | **SpO2 Vitals** | `spo2.c`, `spo2.h` | Blood oxygen saturation (%) and heart rate (BPM) biometric acquisition via I2C (MAX30102). |
 
 ### CubeMX & PlatformIO Integration
