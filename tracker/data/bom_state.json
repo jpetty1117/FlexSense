@@ -1,0 +1,201 @@
+{
+  "budget": 800,
+  "source_note": "Imported from Parts List.xlsx",
+  "columns": {
+    "extra_label": "Weight / Extra"
+  },
+  "items": [
+    {
+      "id": 1,
+      "category": "Sensors/Actuators",
+      "part": "E-mag Brake",
+      "part_number": "Electromagnetic Brake, DC 24V, 6Nm/200Nm",
+      "vendor": "ATO inc",
+      "price_link": 212,
+      "notes": "",
+      "extra": "",
+      "source_row": 2,
+      "link": "https://www.ato.com/electromagnetic-brake-6nm"
+    },
+    {
+      "id": 2,
+      "category": "Sensors/Actuators",
+      "part": "Alternative Motor",
+      "part_number": "40 W DC Gear Motor, 1800 rpm, 12V/24V",
+      "vendor": "ATO inc",
+      "price_link": 151.85,
+      "notes": "",
+      "extra": "",
+      "source_row": 3,
+      "link": "https://www.ato.com/40-w-dc-gear-motor"
+    },
+    {
+      "id": 3,
+      "category": "Sensors/Actuators",
+      "part": "Load Cell",
+      "part_number": "Load Cell",
+      "vendor": "Adafruit",
+      "price_link": 4,
+      "notes": "Concerns about even loading on the load cells, perhaps place strain guages on the axle?",
+      "extra": "",
+      "source_row": 4,
+      "link": "https://www.adafruit.com/product/4543"
+    },
+    {
+      "id": 4,
+      "category": "Sensors/Actuators",
+      "part": "Rotary Encoder",
+      "part_number": "Encoder",
+      "vendor": "Amazon",
+      "price_link": "FREE",
+      "notes": "Jase",
+      "extra": "",
+      "source_row": 5,
+      "link": "https://a.co/d/04qkg0Jx"
+    },
+    {
+      "id": 5,
+      "category": "Sensors/Actuators",
+      "part": "SpO2 Sensor",
+      "part_number": "MAX30102",
+      "vendor": "Amazon",
+      "price_link": 10,
+      "notes": "",
+      "extra": "",
+      "source_row": 6,
+      "link": "https://www.amazon.com/Diitao-MAX30102-Detection-Concentration-Calculation/dp/B0BBDWLP86?th=1"
+    },
+    {
+      "id": 6,
+      "category": "Supporting Electronics",
+      "part": "Buck Converter",
+      "part_number": "LM2596HVS",
+      "vendor": "Amazon",
+      "price_link": 10,
+      "notes": "Mya",
+      "extra": "",
+      "source_row": 8,
+      "link": "https://www.amazon.com/LM2596HVS-Adjustable-Converter-Switching-Regulator/dp/B08FWQDHZP?s=industrial&th=1"
+    },
+    {
+      "id": 7,
+      "category": "Supporting Electronics",
+      "part": "DC Power Supply",
+      "part_number": "",
+      "vendor": "",
+      "price_link": "FREE",
+      "notes": "Cyrus",
+      "extra": "",
+      "source_row": 9,
+      "link": ""
+    },
+    {
+      "id": 8,
+      "category": "Supporting Electronics",
+      "part": "STM32 Blackpill MCU",
+      "part_number": "STM32F411 BlackPill Dev",
+      "vendor": "Adafruit",
+      "price_link": 30,
+      "notes": "",
+      "extra": "",
+      "source_row": 10,
+      "link": "https://www.adafruit.com/product/4877"
+    },
+    {
+      "id": 9,
+      "category": "Supporting Electronics",
+      "part": "H-Bridge Driver",
+      "part_number": "BTS7960",
+      "vendor": "Amazon",
+      "price_link": 15,
+      "notes": "Mya - escooter",
+      "extra": "",
+      "source_row": 11,
+      "link": "https://www.amazon.com/MTDELE-H-Bridge-semiconductor-Refrigeration-Controller/dp/B0D732VYGZ"
+    },
+    {
+      "id": 10,
+      "category": "Supporting Electronics",
+      "part": "ADC",
+      "part_number": "NAU7802",
+      "vendor": "Adafruit",
+      "price_link": 6,
+      "notes": "",
+      "extra": "",
+      "source_row": 12,
+      "link": "https://www.adafruit.com/product/4538"
+    },
+    {
+      "id": 11,
+      "category": "Supporting Electronics",
+      "part": "Logic Level Shifter",
+      "part_number": "Shifter",
+      "vendor": "Amazon",
+      "price_link": 7,
+      "notes": "",
+      "extra": "",
+      "source_row": 13,
+      "link": "https://www.amazon.com/KeeYees-Channels-Converter-Bi-Directional-Shifter/dp/B07LG646VS?s=industrial"
+    },
+    {
+      "id": 12,
+      "category": "Mechanical",
+      "part": "",
+      "part_number": "Inner Rails",
+      "vendor": "Online Metals",
+      "price_link": 7.36,
+      "notes": "nonperforated",
+      "extra": "0.3lbs",
+      "source_row": 16,
+      "link": "https://www.onlinemetals.com/en/buy/aluminum/0-75-x-0-11-aluminum-telescoping-square-tube-6005-t61-annealed/pid/mp-00040840"
+    },
+    {
+      "id": 13,
+      "category": "Mechanical",
+      "part": "",
+      "part_number": "Outer Rails",
+      "vendor": "Online Metals",
+      "price_link": 7.93,
+      "notes": "nonperforated",
+      "extra": "0.47lbs",
+      "source_row": 17,
+      "link": "https://www.onlinemetals.com/en/buy/aluminum/1-x-0-11-aluminum-telescoping-square-tube-6005-t61-annealed/pid/mp-00040836"
+    },
+    {
+      "id": 14,
+      "category": "Mechanical",
+      "part": "",
+      "part_number": "M4 Screws",
+      "vendor": "",
+      "price_link": "FREE ",
+      "notes": "Mya",
+      "extra": "",
+      "source_row": 18,
+      "link": ""
+    },
+    {
+      "id": 15,
+      "category": "Mechanical",
+      "part": "",
+      "part_number": "Lock Pin",
+      "vendor": "Amazon",
+      "price_link": 9.99,
+      "notes": "",
+      "extra": "1.57''x0.31''",
+      "source_row": 19,
+      "link": "https://www.amazon.com/VXCICC-Release-Diameter-Stainless-Locking/dp/B0D8P53BR2/ref=sxin_15_pa_sp_search_thematic_sspa?content-id=amzn1.sym.f3ef5b6e-928d-46a7-b777-dc583fd8199d%3Aamzn1.sym.f3ef5b6e-928d-46a7-b777-dc583fd8199d&crid=74NNPQAUTLP7&cv_ct_cx=lock%2Bpin&keywords=lock%2Bpin&pd_rd_i=B0D8PMC63M&pd_rd_r=8658d468-5638-4482-8ea1-0837dea0edc9&pd_rd_w=hDzj8&pd_rd_wg=u7kUu&pf_rd_p=f3ef5b6e-928d-46a7-b777-dc583fd8199d&pf_rd_r=6JVVKE469Z0GPKKV4YMP&qid=1788897444&sbo=RZvfv%2F%2FHxDF%2BO5021pAnSA%3D%3D&sprefix=lock%2Bpin%2Caps%2C209&sr=1-1-6024b2a3-78e4-4fed-8fed-e1613be3bcce-spons&aref=CwMBc44SML&sp_csd=d2lkZ2V0TmFtZT1zcF9zZWFyY2hfdGhlbWF0aWM&th=1"
+    },
+    {
+      "id": 16,
+      "category": "Mechanical",
+      "part": "",
+      "part_number": "Load Cell Spacers",
+      "vendor": "",
+      "price_link": "",
+      "notes": "",
+      "extra": "",
+      "source_row": 20,
+      "link": ""
+    }
+  ]
+}

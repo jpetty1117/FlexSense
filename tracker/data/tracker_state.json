@@ -1,0 +1,460 @@
+{
+  "1.1.1": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "STM Controller"
+      },
+      {
+        "category": "accomplishment",
+        "date": "2026-09-08",
+        "text": "STM32 Blackpill MCU is chosen"
+      }
+    ],
+    "notes": "STM Controller - 9/1 Update",
+    "owner": "Jase",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.1.2": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "No longer needed"
+      }
+    ],
+    "notes": "No longer needed - 9/1 Update",
+    "owner": "Jase",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.1.3": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Display on computer, not on MCU"
+      }
+    ],
+    "notes": "Display on computer, not on MCU - 9/1 Update",
+    "owner": "Jase",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.1.4": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Store on computer"
+      }
+    ],
+    "notes": "Store on computer - 9/1 Update",
+    "owner": "Jase",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "1.1.5": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Order STM MCU before 9/9/26"
+      }
+    ],
+    "notes": "Order STM MCU before 9/9/26 - 9/1 Update",
+    "owner": "",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "1.1.6": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Order amplifier module for load cell by 9/9 testing will be powered by USB"
+      },
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "All MCU things run on 3.3V so main power to motor then buck converter to 3.3V"
+      }
+    ],
+    "notes": "Order amplifier module for load cell by 9/9 testing will be powered by USB - 9/1 Update\nAll MCU things run on 3.3V so main power to motor then buck converter to 3.3V - 9/7 Update",
+    "owner": "Mya",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.1.7": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "No longer needed: not custom design"
+      }
+    ],
+    "notes": "No longer needed: not custom design - 9/1 Update",
+    "owner": "",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.1.8": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Jase completed design"
+      }
+    ],
+    "notes": "Jase completed design - 9/1 Update",
+    "owner": "",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.2.1": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Load Cell is being used to measure force"
+      }
+    ],
+    "notes": "Load Cell is being used to measure force - 9/1 Update",
+    "owner": "Mya",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.2.2": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Brushless DC Motor"
+      }
+    ],
+    "notes": "Brushless DC Motor - 9/1 Update",
+    "owner": "Ana",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.2.3": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Might need amplifer for load cell, rotary encoder needs more research"
+      }
+    ],
+    "notes": "Might need amplifer for load cell, rotary encoder needs more research - 9/1 Update",
+    "owner": "Jase",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.2.4": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Changed from EM motor to brushless motor, doing more research with approved vendors"
+      },
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "Currently going to use Mya E-Scooter motor but might switch to EM brake since it made for the functional use"
+      }
+    ],
+    "notes": "Changed from EM motor to brushless motor, doing more research with approved vendors  - 9/1 Update\nCurrently going to use Mya E-Scooter motor but might switch to EM brake since it made for the functional use - 9/7 Update",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "1.3.1": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Rotary Encoder"
+      }
+    ],
+    "notes": "Rotary Encoder - 9/1 Update",
+    "owner": "",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.3.2": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Will no longer be needing this since force measured from the handle."
+      }
+    ],
+    "notes": "Will no longer be needing this since force measured from the handle. - 9/1 Update",
+    "owner": "",
+    "revised": "",
+    "status": "complete"
+  },
+  "1.3.3": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Load Cell, Rotary Encoder will be ordered by 9/9"
+      },
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "Part list is made and ready to be ordered soon"
+      }
+    ],
+    "notes": "Load Cell, Rotary Encoder will be ordered by 9/9 - 9/1 Update\nPart list is made and ready to be ordered soon - 9/7 Update",
+    "owner": "",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "2.1.1": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "2.1.2": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Order parts for gripper, linear slide rails by 9/9"
+      }
+    ],
+    "notes": "Order parts for gripper, linear slide rails by 9/9 - 9/1 Update",
+    "owner": "",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "2.1.3": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-01",
+        "text": "Need parts to complete this"
+      },
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "Pad is wedge similar to current bicep curl pads"
+      }
+    ],
+    "notes": "Need parts to complete this  - 9/1 Update\nPad is wedge similar to current bicep curl pads - 9/7 Update",
+    "owner": "",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "2.1.4": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "2.2.1": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "Rails researched and added to parts list aluminum rails 1 inch wide"
+      }
+    ],
+    "notes": "Rails researched and added to parts list aluminum rails 1 inch wide - 9/7 Update",
+    "owner": "Ana",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "2.2.2": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "The motor will be attached to main pivot point via a belt system. Might be switched to braking system after more discussion"
+      },
+      {
+        "category": "accomplishment",
+        "date": "2026-09-08",
+        "text": "CAD design completed for revision 1 of the conceptual drawing."
+      },
+      {
+        "category": "challenge",
+        "date": "2026-09-08",
+        "text": "Delays in the design due to design choice going between motor and brake as resistance source."
+      },
+      {
+        "category": "challenge",
+        "date": "2026-09-08",
+        "text": "Discussion about how and where to measure load cell caused delays."
+      }
+    ],
+    "notes": "The motor will be attached to main pivot point via a belt system. Might be switched to braking system after more discussion- 9/7 Update",
+    "owner": "Ana",
+    "revised": "",
+    "status": "complete"
+  },
+  "2.2.6": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "2.2.7": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "2.3.1": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "Lock method for force measurement will be pins that push into known length for the bar, lok at 2.3.2 for handle update"
+      }
+    ],
+    "notes": "Lock method for force measurement will be pins that push into known length for the bar, lok at 2.3.2 for handle update - 9/7 Update",
+    "owner": "Ana",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "2.3.2": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-07",
+        "text": "Design is looked into for getting a single point load cell where the load cell is in between the attachement point of handle and slides with plate to distribute load."
+      }
+    ],
+    "notes": "Design is looked into for getting a single point load cell where the load cell is in between the attachement point of handle and slides with plate to distribute load. - 9/7 Update",
+    "owner": "Ana",
+    "revised": "",
+    "status": "complete"
+  },
+  "2.3.4": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.1.1": {
+    "note_entries": [
+      {
+        "category": "accomplishment",
+        "date": "2026-09-08",
+        "text": "interfaced rotary encoder with STM32"
+      }
+    ],
+    "notes": "",
+    "owner": "Jase",
+    "revised": "",
+    "status": "in-progress"
+  },
+  "3.1.2": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.1.3": {
+    "note_entries": [
+      {
+        "category": "note",
+        "date": "2026-09-08",
+        "text": "For the controls a feedforward will have to be used since trying to use feedback to match an arm is more complicated."
+      }
+    ],
+    "notes": "",
+    "owner": "Jase",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.2.1": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.2.2": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.2.3": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.2.4": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.2.5": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.3.1": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.3.2": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.3.3": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.3.4": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "3.3.5": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  },
+  "4.0.0": {
+    "note_entries": [],
+    "notes": "",
+    "owner": "",
+    "revised": "",
+    "status": "not-started"
+  }
+}

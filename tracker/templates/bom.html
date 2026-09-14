@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}BOM — Squish Therapy Tracker{% endblock %}
+{% block content %}
+<section class="hero-row">
+  <div>
+    <h1>Bill of Materials (BOM)</h1>
+    <p class="muted">Editable project parts list imported from your current <strong>Parts List.xlsx</strong>. Changes save automatically to <code>data/bom_state.json</code>.</p>
+  </div>
+  <div class="toolbar toolbar-right">
+    <a class="btn" href="{{ url_for('export_bom_csv') }}">Export BOM CSV</a>
+  </div>
+</section>
+
+<section class="bom-summary-grid">
+  <div class="summary-card bom-kpi">
+    <span class="field-label">Items</span>
+    <strong id="bomItemCount">{{ summary.item_count }}</strong>
+    <span class="muted tiny">Across <span id="bomCategoryCount">{{ summary.category_count }}</span> categories</span>
+  </div>
+  <div class="summary-card bom-kpi">
+    <span class="field-label">Known numeric cost</span>
+    <strong id="bomKnownCost">${{ '%.2f'|format(summary.known_cost) }}</strong>
+    <span class="muted tiny">FREE and blank prices are excluded</span>
+  </div>
+  <div class="summary-card bom-kpi">
+    <label for="bomBudget" class="field-label">Project budget</label>
+    <div class="currency-input"><span>$</span><input id="bomBudget" class="field-input" type="number" min="0" step="0.01" value="{{ '%.2f'|format(summary.budget) }}"></div>
+    <span class="muted tiny">Editable</span>
+  </div>
+  <div class="summary-card bom-kpi {% if summary.remaining < 0 %}budget-over{% endif %}">
+    <span class="field-label">Budget remaining</span>
+    <strong id="bomRemaining">${{ '%.2f'|format(summary.remaining) }}</strong>
+    <span class="muted tiny">Based on known numeric prices</span>
+  </div>
+</section>
+
+<section class="panel-card">
+  <div class="panel-title-row">
+    <div>
+      <h2>Add BOM Item</h2>
+      <p class="tiny muted">Enter a short one-sentence description or part number, plus the purchase link when available.</p>
+    </div>
+  </div>
+  <form id="bomAddForm" class="bom-add-grid">
+    <label><span class="field-label">Category</span><input class="field-input" name="category" placeholder="Mechanical"></label>
+    <label><span class="field-label">Part</span><input class="field-input" name="part" placeholder="Lock Pin"></label>
+    <label><span class="field-label">Part # / Description</span><input class="field-input" name="part_number" placeholder="M4 or one sentence"></label>
+    <label><span class="field-label">Vendor</span><input class="field-input" name="vendor" placeholder="Amazon"></label>
+    <label><span class="field-label">Price</span><input class="field-input" name="price_link" placeholder="9.99 or FREE"></label>
+    <label><span class="field-label">Part Link</span><input class="field-input" name="link" type="url" placeholder="https://..."></label>
+    <label><span class="field-label">Notes</span><input class="field-input" name="notes" placeholder="Optional note"></label>
+    <label><span class="field-label">{{ extra_label }}</span><input class="field-input" name="extra" placeholder="0.3 lb"></label>
+    <div class="bom-add-action"><button class="btn primary" type="submit">Add Item</button></div>
+  </form>
+</section>
+
+<section class="table-card bom-card" id="bomTable">
+  <div class="bom-table-controls">
+    <div>
+      <label for="bomSort" class="field-label">Sort table</label>
+      <select id="bomSort" class="field-input bom-sort-select">
+        <option value="original">Original order</option>
+        <option value="category-asc">Category A–Z</option>
+        <option value="category-desc">Category Z–A</option>
+        <option value="vendor-asc">Vendor A–Z</option>
+        <option value="vendor-desc">Vendor Z–A</option>
+        <option value="part-asc">Part A–Z</option>
+        <option value="part-desc">Part Z–A</option>
+        <option value="part_number-asc">Part # / Description A–Z</option>
+        <option value="price-asc">Price low to high</option>
+        <option value="price-desc">Price high to low</option>
+      </select>
+    </div>
+    <span class="muted tiny">Edits still save automatically while the table is sorted.</span>
+  </div>
+
+  <div id="bomTopScroll" class="bom-top-scroll" aria-label="Horizontal table scrollbar">
+    <div id="bomTopScrollSpacer" class="bom-top-scroll-spacer"></div>
+  </div>
+
+  <div id="bomScrollBody" class="table-scroll bom-scroll">
+    <table class="bom-table">
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Part</th>
+          <th>Part # / Description</th>
+          <th>Vendor</th>
+          <th>Price</th>
+          <th>Part Link</th>
+          <th>Notes</th>
+          <th>{{ extra_label }}</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="bomBody">
+        {% for item in items %}
+          <tr class="bom-row" data-bom-id="{{ item.id }}" data-original-index="{{ loop.index0 }}">
+            <td><input class="bom-field" data-field="category" value="{{ item.category }}"></td>
+            <td><input class="bom-field" data-field="part" value="{{ item.part }}"></td>
+            <td><input class="bom-field wide" data-field="part_number" value="{{ item.part_number }}"></td>
+            <td><input class="bom-field" data-field="vendor" value="{{ item.vendor }}"></td>
+            <td><input class="bom-field price" data-field="price_link" value="{{ item.price_link }}"></td>
+            <td>
+              <div class="bom-link-cell">
+                <input class="bom-field bom-link-input" data-field="link" type="url" value="{{ item.link }}" placeholder="https://...">
+                <a class="btn bom-open-link {% if not item.link %}is-disabled{% endif %}" href="{{ item.link if item.link else '#' }}" target="_blank" rel="noopener noreferrer" {% if not item.link %}aria-disabled="true" tabindex="-1"{% endif %}>Open</a>
+              </div>
+            </td>
+            <td><textarea class="bom-field bom-notes" data-field="notes" rows="2">{{ item.notes }}</textarea></td>
+            <td><input class="bom-field" data-field="extra" value="{{ item.extra }}"></td>
+            <td><button class="btn danger-outline bom-delete" type="button">Delete</button></td>
+          </tr>
+        {% else %}
+          <tr id="bomEmptyRow"><td colspan="9" class="empty-table">No BOM items yet. Add one above.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

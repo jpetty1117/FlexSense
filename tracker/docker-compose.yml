@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  squish-tracker:
+    build: .
+    container_name: squish-tracker
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    volumes:
+      - ./data:/app/data
+    networks:
+      - doy_default
+
+networks:
+  doy_default:
+    external: true

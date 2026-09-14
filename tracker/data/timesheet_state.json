@@ -1,0 +1,72 @@
+{
+  "Ana Luo": {
+    "2026-08-30": {
+      "actual": 3.17,
+      "loaded_at": "2026-09-08T17:18:18",
+      "next_week": 5.0,
+      "predicted": 3.0
+    },
+    "2026-09-05": {
+      "actual": 7.67,
+      "loaded_at": "2026-09-08T17:19:14",
+      "next_week": 7.0,
+      "predicted": 5.0
+    }
+  },
+  "Cyrus Lowden": {
+    "2026-08-30": {
+      "actual": 4.25,
+      "loaded_at": "2026-09-08T17:18:23",
+      "next_week": 5.0,
+      "predicted": 2.0
+    },
+    "2026-09-06": {
+      "actual": 6.95,
+      "loaded_at": "2026-09-08T17:19:22",
+      "next_week": 10.0,
+      "predicted": 6.0
+    }
+  },
+  "Jase Petty": {
+    "2026-08-28": {
+      "actual": 4.67,
+      "loaded_at": "2026-09-08T17:18:27",
+      "next_week": 8.0,
+      "predicted": 5.0
+    },
+    "2026-09-05": {
+      "actual": 9.67,
+      "loaded_at": "2026-09-08T17:19:26",
+      "next_week": 8.0,
+      "predicted": 8.0
+    }
+  },
+  "Mya Tinsay": {
+    "2026-08-26": {
+      "actual": 2.33,
+      "loaded_at": "2026-09-08T17:18:39",
+      "next_week": 5.0,
+      "predicted": 0.0
+    },
+    "2026-09-06": {
+      "actual": 10.33,
+      "loaded_at": "2026-09-08T17:19:29",
+      "next_week": 8.0,
+      "predicted": 5.0
+    }
+  },
+  "Nicolas Bailey": {
+    "2026-08-26": {
+      "actual": 2.17,
+      "loaded_at": "2026-09-08T17:19:08",
+      "next_week": 7.0,
+      "predicted": 2.0
+    },
+    "2026-09-05": {
+      "actual": 7.5,
+      "loaded_at": "2026-09-08T18:15:57",
+      "next_week": 10.0,
+      "predicted": 8.0
+    }
+  }
+}

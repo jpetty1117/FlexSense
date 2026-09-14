@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Timesheets — Squish Therapy Tracker{% endblock %}
+{% block content %}
+<section class="hero-row">
+  <div>
+    <h1>Weekly Timesheets</h1>
+    <p class="muted">Load each teammate's weekly .xlsx timesheet. The table uses the same Predicted / Actual / Delta / Next Week / Cumulative calculations as the desktop tracker.</p>
+  </div>
+</section>
+
+<section class="panel-card">
+  <form method="post" enctype="multipart/form-data" class="upload-row">
+    <label class="file-picker">
+      <input type="file" name="timesheets" accept=".xlsx" multiple required>
+      <span>Choose .xlsx files</span>
+    </label>
+    <button class="btn primary" type="submit">Load Timesheet(s)</button>
+  </form>
+  <form method="post" action="{{ url_for('clear_timesheets') }}" onsubmit="return confirm('Clear all loaded timesheet history? This cannot be undone.');">
+    <button class="btn danger-outline" type="submit">Clear All Timesheet Data</button>
+  </form>
+</section>
+
+<section class="table-card">
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Member</th><th>Predicted</th><th>Actual</th><th>Delta</th><th>Next Week</th><th>Cumulative</th></tr></thead>
+      <tbody>
+        {% if member_rows %}
+          {% for row in member_rows %}
+            <tr>
+              <td>{{ row.name }}</td><td>{{ '%.2f'|format(row.predicted) }}</td><td>{{ '%.2f'|format(row.actual) }}</td>
+              <td class="delta">{{ '%.2f'|format(row.delta) }}</td><td>{{ '%.2f'|format(row.next_week) }}</td><td>{{ '%.2f'|format(row.cumulative) }}</td>
+            </tr>
+          {% endfor %}
+          {% if team_total %}
+            <tr class="team-total"><td>Team Total</td><td>{{ '%.2f'|format(team_total.predicted) }}</td><td>{{ '%.2f'|format(team_total.actual) }}</td><td>{{ '%.2f'|format(team_total.delta) }}</td><td>{{ '%.2f'|format(team_total.next_week) }}</td><td>{{ '%.2f'|format(team_total.cumulative) }}</td></tr>
+          {% endif %}
+        {% else %}
+          <tr><td colspan="6" class="empty-table">No timesheets loaded yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
