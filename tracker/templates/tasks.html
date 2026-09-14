@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Tasks — Squish Therapy Tracker{% endblock %}
+{% block content %}
+<section class="hero-row">
+  <div>
+    <h1>Project Tracker</h1>
+    <p class="muted">Today: {{ today.strftime('%m/%d/%Y') }} · {{ total_tasks }} tasks</p>
+  </div>
+  <div class="toolbar toolbar-right">
+    <button class="btn primary" id="saveAllBtn">Save All Now</button>
+    <button class="btn" onclick="location.reload()">Refresh</button>
+    <a class="btn" href="{{ url_for('export_csv') }}">Export CSV</a>
+    <a class="btn" href="{{ url_for('export_gan') }}">Export .gan</a>
+  </div>
+</section>
+
+<section class="summary-card blue-tint">
+  <div class="summary-strong" id="remainingHours">Work hours remaining: {{ '%.0f'|format(remaining) }} hrs</div>
+  {% if weeks_left > 0 %}
+    <div class="summary-sub">Minimum pace: {{ '%.1f'|format(pace) }} hrs/week per team · demo on {{ demo_date.strftime('%m/%d/%Y') }} ({{ '%.1f'|format(weeks_left) }} weeks left)</div>
+  {% else %}
+    <div class="summary-sub">Demo date ({{ demo_date.strftime('%m/%d/%Y') }}) has passed · {{ '%.0f'|format(remaining) }} hrs still remain.</div>
+  {% endif %}
+</section>
+
+<section class="progress-block">
+  <div class="progress-copy">
+    <strong>Overall progress</strong>
+    <span>{{ complete_count }} / {{ total_tasks }} tasks complete · {{ '%.0f'|format(progress_pct) }}%</span>
+  </div>
+  <div class="progress-track"><div class="progress-fill" style="width: {{ progress_pct }}%"></div></div>
+</section>
+
+<section class="controls-row">
+  <div class="stat-chips">
+    {% set labels = {'all':'All','overdue':'Overdue','soon':'Due ≤14d','upcoming':'Upcoming','complete':'Complete'} %}
+    {% for key in ['all','overdue','soon','upcoming','complete'] %}
+      <a class="chip chip-{{ key }} {% if current_filter == key %}active{% endif %}"
+         href="{{ url_for('tasks_page', filter=key, sort=sort_mode) }}">{{ labels[key] }}: {{ counts[key] }}</a>
+    {% endfor %}
+  </div>
+  <form class="sort-form" method="get" action="{{ url_for('tasks_page') }}">
+    <input type="hidden" name="filter" value="{{ current_filter }}">
+    <label for="sort">Sort by:</label>
+    <select id="sort" name="sort" onchange="this.form.submit()">
+      {% for option in sort_options %}
+        <option value="{{ option }}" {% if option == sort_mode %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</section>
+
+<section class="task-list" id="taskList">
+  {% set ns = namespace(last_sec=None, last_sub=None, last_owner='__first__') %}
+  {% for row in tasks %}
+    {% if grouped %}
+      {% if row.section != ns.last_sec %}
+        <h2 class="section-heading">{{ row.section }}</h2>
+        {% set ns.last_sec = row.section %}
+        {% set ns.last_sub = None %}
+      {% endif %}
+      {% if row.subsection != ns.last_sub %}
+        <h3 class="subsection-heading">{{ row.subsection }}</h3>
+        {% set ns.last_sub = row.subsection %}
+      {% endif %}
+    {% elif owner_grouped %}
+      {% set owner = row.entry.owner %}
+      {% if owner != ns.last_owner %}
+        <h2 class="section-heading">{% if owner %}{{ owner_info[owner][0] }}{% else %}Unassigned{% endif %}</h2>
+        {% set ns.last_owner = owner %}
+      {% endif %}
+    {% endif %}
+
+    <article class="task-card bucket-{{ row.bucket }}" data-task-id="{{ row.id }}">
+      <div class="task-main">
+        <div class="task-idline">{{ row.id }}{% if not grouped %} · {{ row.subsection }}{% endif %}</div>
+        <div class="task-name">{{ row.name }}</div>
+        <div class="note-preview" data-note-preview="{{ row.id }}">
+          {% if row.entry.note_entries %}
+            {% set note = row.entry.note_entries[-1] %}
+            {{ note.date or 'undated' }} · {{ note.category|replace('_',' ')|title }}: {{ note.text[:90] }}{% if note.text|length > 90 %}…{% endif %}
+          {% else %}
+            No notes yet
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="task-date">
+        <span class="field-label">Planned</span>
+        <strong>{{ row.start|shortdate }}–{{ row.end|shortdate }}</strong>
+        <span class="bucket-label">{{ row.bucket|upper if row.bucket != 'soon' else 'DUE SOON' }}</span>
+      </div>
+
+      <div class="task-fields">
+        <label>
+          <span class="field-label">Revised end</span>
+          <input class="field-input task-revised" data-task="{{ row.id }}" type="date" value="{{ row.entry.revised }}">
+        </label>
+        <label>
+          <span class="field-label">Status</span>
+          <select class="field-input status-{{ row.entry.status }} task-status" data-task="{{ row.id }}">
+            {% for status in statuses %}<option value="{{ status }}" {% if status == row.entry.status %}selected{% endif %}>{{ status|replace('-',' ')|title }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>
+          <span class="field-label">Owner</span>
+          <select class="field-input task-owner" data-task="{{ row.id }}">
+            <option value="">—</option>
+            {% for key in owner_keys %}<option value="{{ key }}" {% if key == row.entry.owner %}selected{% endif %}>{{ owner_info[key][0].split(' ')[0] }}</option>{% endfor %}
+          </select>
+        </label>
+        <button class="btn notes-btn" data-open-notes="{{ row.id }}">Notes (<span data-note-count="{{ row.id }}">{{ row.note_count }}</span>)</button>
+      </div>
+    </article>
+  {% else %}
+    <div class="empty-state">No tasks match this filter.</div>
+  {% endfor %}
+</section>
+
+<div class="modal-backdrop hidden" id="notesModal" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="notesTitle">
+    <div class="modal-head">
+      <div>
+        <h2 id="notesTitle">Task Notes</h2>
+        <p class="muted" id="notesTaskName"></p>
+      </div>
+      <button class="icon-btn" id="closeNotes" aria-label="Close">×</button>
+    </div>
+    <div id="notesList" class="notes-list"></div>
+    <div class="note-form blue-tint">
+      <input type="hidden" id="noteEditIndex" value="">
+      <div class="note-form-grid">
+        <label><span class="field-label">Date</span><input id="noteDate" class="field-input" type="date" value="{{ today.isoformat() }}"></label>
+        <label><span class="field-label">Category</span>
+          <select id="noteCategory" class="field-input">
+            <option value="accomplishment">Accomplishment</option>
+            <option value="challenge">Challenge / Help Needed</option>
+            <option value="goal">Goal for Next Week</option>
+            <option value="note" selected>General Note</option>
+          </select>
+        </label>
+      </div>
+      <label><span class="field-label">Note</span><textarea id="noteText" rows="3" placeholder="Enter a task update…"></textarea></label>
+      <div class="toolbar">
+        <button class="btn primary" id="saveNoteBtn">Add Note</button>
+        <button class="btn" id="clearNoteBtn" type="button">Clear Form</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

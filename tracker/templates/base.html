@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Squish Therapy Tracker{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div>
+        <div class="brand">Squish Therapy — Project Tracker</div>
+        <div class="brand-sub">FlexSense team workspace</div>
+      </div>
+      <nav class="tabs" aria-label="Main navigation">
+        <a class="tab {% if active_tab == 'tasks' %}active{% endif %}" href="{{ url_for('tasks_page') }}">Tasks</a>
+        <a class="tab {% if active_tab == 'timesheets' %}active{% endif %}" href="{{ url_for('timesheets_page') }}">Timesheets</a>
+        <a class="tab {% if active_tab == 'bom' %}active{% endif %}" href="{{ url_for('bom_page') }}">BOM</a>
+        <a class="tab {% if active_tab == 'cad' %}active{% endif %}" href="{{ url_for('cad_page') }}">CAD Model</a>
+        <a class="tab {% if active_tab == 'slides' %}active{% endif %}" href="{{ url_for('slides_page') }}">Slides</a>
+        <a class="tab" href="{{ url_for('logout') }}" style="margin-left: 1rem; opacity: 0.8;">Logout</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-stack">
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  {% block scripts %}{% endblock %}
+  <script src="{{ url_for('static', filename='js/tracker.js') }}"></script>
+</body>
+</html>

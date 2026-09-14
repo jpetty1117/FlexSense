@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Slides — Squish Therapy Tracker{% endblock %}
+{% block content %}
+<section class="hero-row">
+  <div>
+    <h1>Weekly Slide Export</h1>
+    <p class="muted">Builds the same standalone PowerPoint format as the desktop tracker: one Labor Status slide plus an Individual Accomplishments slide for each teammate with selected updates.</p>
+  </div>
+</section>
+
+<section class="panel-card form-stack">
+  <div class="form-row wrap">
+    <label><span class="field-label">Meeting date</span><input id="meetingDate" class="field-input" type="date" value="{{ today.isoformat() }}"></label>
+    <label><span class="field-label">Week #</span><input id="weekNum" class="field-input narrow" type="number" min="1" value="{{ week_num }}"></label>
+    <button class="btn" id="recalcWeek" type="button">Recalculate</button>
+  </div>
+
+  <div>
+    <span class="field-label">Include teammates</span>
+    <div class="owner-checks">
+      {% for key in owner_keys %}
+        <label class="check-pill"><input type="checkbox" class="owner-include" value="{{ key }}" checked> {{ owner_info[key][0] }}</label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="form-row wrap">
+    <label><span class="field-label">Notes dated from</span><input id="rangeFrom" class="field-input" type="date" value="{{ default_from.isoformat() }}"></label>
+    <label><span class="field-label">To</span><input id="rangeTo" class="field-input" type="date" value="{{ today.isoformat() }}"></label>
+    <button class="btn primary" id="loadCandidates" type="button">Load Candidate Notes</button>
+  </div>
+  <p class="tiny muted">Undated notes are always included regardless of the selected range, matching the desktop tracker.</p>
+</section>
+
+<section class="panel-card" id="candidatePanel">
+  <div id="candidateList" class="candidate-list">
+    <div class="empty-state compact">Click “Load Candidate Notes” to see accomplishment, challenge, and goal notes available for the slide deck.</div>
+  </div>
+</section>
+
+<div class="toolbar">
+  <button class="btn primary large" id="exportPptx">Export PPTX</button>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>window.SLIDES_PAGE = true;</script>
+{% endblock %}

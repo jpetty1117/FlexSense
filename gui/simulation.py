@@ -58,7 +58,11 @@ class LiveDataGenerator:
         self.spo2 += random.gauss(0, 0.05)
         self.spo2 = max(94.0, min(99.0, self.spo2))
 
-        return rom_angle, speed, self.spo2
+        # Handle force: nominal target resistance with injury deficit dip
+        force_dip = (self.target_resistance * 0.45) * np.exp(-((ideal_rom - self.injury_angle)**2) / (2 * self.injury_width**2))
+        force_lbs = max(1.0, self.target_resistance - force_dip + random.gauss(0, 0.4))
+
+        return rom_angle, speed, force_lbs, self.spo2
 
 
 def generate_historical_session(duration=30.0, sample_rate=50, session_index=0):
@@ -106,8 +110,9 @@ def generate_historical_session(duration=30.0, sample_rate=50, session_index=0):
     speed = ideal_speed - dip_derivative
     speed += np.random.normal(0, 5.0, n_samples)  # sensor noise
 
-    # Strength is constant (isotonic)
-    strength = np.full(n_samples, target_resistance)
+    # Strength model: target resistance with realistic injury dip
+    force_dip = (target_resistance * 0.45) * np.exp(-((ideal_rom - injury_angle)**2) / (2 * injury_width**2))
+    strength = np.clip(target_resistance - force_dip + np.random.normal(0, 0.4, n_samples), 1.0, None)
 
     # SpO2: slow drift + noise, clamped 94-99%
     base_spo2 = 96.5 + 0.5 * session_index

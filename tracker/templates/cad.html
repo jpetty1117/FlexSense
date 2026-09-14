@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}CAD Model — Squish Therapy Tracker{% endblock %}
+{% block content %}
+<section class="hero-row">
+  <div>
+    <h1>CAD Model Library</h1>
+    <p class="muted">Upload STEP designs, keep every revision, document what changed, and open any saved version in the interactive 3D viewer.</p>
+  </div>
+</section>
+
+<section class="panel-card cad-upload-card">
+  <div class="panel-title-row">
+    <div>
+      <h2>Upload CAD Version</h2>
+      <p class="tiny muted">Uploading a new version never overwrites the previous STEP file. Files are stored under <code>data/cad_models</code> and revision notes are stored in <code>data/cad_state.json</code>.</p>
+    </div>
+  </div>
+  <form id="cadUploadForm" class="cad-upload-grid" method="post" action="{{ url_for('cad_upload') }}" enctype="multipart/form-data">
+    <label>
+      <span class="field-label">Design</span>
+      <select id="cadDesignChoice" class="field-input" name="design_id" required>
+        {% for design in designs %}
+          <option value="{{ design.id }}" {% if selected_design and design.id == selected_design.id %}selected{% endif %}>{{ design.name }}</option>
+        {% endfor %}
+        <option value="__new__" {% if not designs %}selected{% endif %}>+ New design</option>
+      </select>
+    </label>
+    <label id="cadNewDesignField" class="{% if designs %}hidden{% endif %}">
+      <span class="field-label">New design name</span>
+      <input id="cadDesignName" class="field-input" name="design_name" placeholder="FlexSense Assembly">
+    </label>
+    <label>
+      <span class="field-label">Version label</span>
+      <input class="field-input" name="version_label" placeholder="Rev 2 or Prototype B">
+    </label>
+    <label class="cad-file-field">
+      <span class="field-label">STEP file</span>
+      <input class="field-input cad-file-input" type="file" name="cad_file" accept=".step,.stp" required>
+    </label>
+    <label class="cad-summary-field">
+      <span class="field-label">What changed?</span>
+      <input class="field-input" name="change_summary" maxlength="240" placeholder="Moved load cell mount closer to the handle.">
+    </label>
+    <label class="cad-notes-field">
+      <span class="field-label">Revision notes</span>
+      <textarea class="field-input" name="notes" rows="3" placeholder="Optional details, reasoning, unresolved issues, measurements, or next steps."></textarea>
+    </label>
+    <div class="cad-upload-action">
+      <button class="btn primary large" type="submit">Upload Version</button>
+    </div>
+  </form>
+</section>
+
+<div class="cad-workspace">
+  <aside class="cad-sidebar">
+    <section class="panel-card cad-library-card">
+      <h2>Designs</h2>
+      {% if designs %}
+        <div class="cad-design-list">
+          {% for design in designs %}
+            <a class="cad-design-link {% if selected_design and design.id == selected_design.id %}active{% endif %}"
+               href="{{ url_for('cad_page', design=design.id) }}">
+              <span>{{ design.name }}</span>
+              <small>{{ design.versions|length }} version{% if design.versions|length != 1 %}s{% endif %}</small>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state compact">No CAD designs uploaded yet.</div>
+      {% endif %}
+    </section>
+
+    {% if selected_design %}
+    <section class="panel-card cad-history-card">
+      <div class="cad-history-head">
+        <div>
+          <span class="field-label">Version History</span>
+          <h2>{{ selected_design.name }}</h2>
+        </div>
+        <span class="cad-history-count">{{ versions|length }}</span>
+      </div>
+      <div class="cad-version-list">
+        {% for version in versions %}
+          <a class="cad-version-card {% if selected_version and version.id == selected_version.id %}active{% endif %}"
+             href="{{ url_for('cad_page', design=selected_design.id, version=version.id) }}">
+            <div class="cad-version-topline">
+              <strong>V{{ version.version_number }}</strong>
+              {% if loop.first %}<span class="cad-current-badge">CURRENT</span>{% endif %}
+            </div>
+            <div class="cad-version-label">{{ version.label or ('Version ' ~ version.version_number) }}</div>
+            <div class="cad-version-summary">{{ version.change_summary or 'No change summary entered.' }}</div>
+            <div class="cad-version-date">{{ version.uploaded_at[:10] if version.uploaded_at else '' }}</div>
+          </a>
+        {% else %}
+          <div class="empty-state compact">No versions uploaded for this design.</div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </aside>
+
+  <section class="cad-main">
+    {% if selected_design and selected_version %}
+      <div class="panel-card cad-viewer-card">
+        <div class="cad-viewer-head">
+          <div>
+            <span class="field-label">Viewing</span>
+            <h2>{{ selected_design.name }} · {{ selected_version.label }}</h2>
+            <p class="tiny muted">{{ selected_version.original_filename }} · {{ '%.2f'|format(selected_version.file_size / 1048576) }} MB</p>
+          </div>
+          <div class="toolbar">
+            <button class="btn" id="cadFitBtn" type="button">Fit Model</button>
+            <button class="btn" id="cadWireBtn" type="button" aria-pressed="false">Wireframe</button>
+            <a class="btn" href="{{ url_for('cad_download_file', design_id=selected_design.id, version_id=selected_version.id) }}">Download STEP</a>
+          </div>
+        </div>
+
+        <div id="cadViewer"
+             class="cad-viewer"
+             data-model-url="{{ url_for('cad_model_file', design_id=selected_design.id, version_id=selected_version.id) }}">
+          <div id="cadViewerStatus" class="cad-viewer-status">
+            <strong>Loading CAD viewer…</strong>
+            <span>STEP files are converted to a display mesh in your browser.</span>
+          </div>
+        </div>
+        <div class="cad-viewer-help">Left-drag to rotate · mouse wheel to zoom · right-drag to pan</div>
+      </div>
+
+      <div id="cadVersionEditor"
+           class="panel-card cad-documentation-card"
+           data-design-id="{{ selected_design.id }}"
+           data-version-id="{{ selected_version.id }}">
+        <div class="panel-title-row">
+          <div>
+            <h2>Revision Documentation</h2>
+            <p class="tiny muted">These notes stay attached to this exact saved CAD version.</p>
+          </div>
+          <button id="cadSaveNotes" class="btn primary" type="button">Save Revision Notes</button>
+        </div>
+        <div class="cad-doc-grid">
+          <label>
+            <span class="field-label">Version label</span>
+            <input id="cadEditLabel" class="field-input" value="{{ selected_version.label }}">
+          </label>
+          <label>
+            <span class="field-label">Uploaded</span>
+            <input class="field-input" value="{{ selected_version.uploaded_at.replace('T', ' ') if selected_version.uploaded_at else '' }}" readonly>
+          </label>
+          <label class="cad-doc-wide">
+            <span class="field-label">What changed?</span>
+            <input id="cadEditSummary" class="field-input" maxlength="240" value="{{ selected_version.change_summary }}" placeholder="One-sentence revision summary">
+          </label>
+          <label class="cad-doc-wide">
+            <span class="field-label">Detailed notes</span>
+            <textarea id="cadEditNotes" class="field-input" rows="5" placeholder="Design reasoning, issues found, dimensions changed, testing feedback, or follow-up work.">{{ selected_version.notes }}</textarea>
+          </label>
+        </div>
+      </div>
+    {% else %}
+      <div class="panel-card cad-empty-viewer">
+        <div class="empty-state">
+          <strong>No CAD model selected.</strong><br>
+          Upload your first <code>.STEP</code> or <code>.STP</code> design above. Each later upload can be saved as a new version without deleting the old one.
+        </div>
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if selected_version %}
+<script src="https://cdn.jsdelivr.net/npm/three@0.138.3/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.138.3/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/occt-import-js@0.0.22/dist/occt-import-js.js"></script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/cad.js') }}"></script>
+{% endblock %}
