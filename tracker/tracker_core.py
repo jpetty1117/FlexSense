@@ -36,7 +36,14 @@ CAD_FILES_DIR.mkdir(exist_ok=True)
 
 STATUSES = ['not-started', 'in-progress', 'complete', 'blocked']
 
-HOURS_PER_TASK_DAY = 2
+# Work-hour weighting is calibrated so the currently loaded project state
+# starts at 458 estimated hours remaining. Each task keeps a fixed weight
+# based on its planned duration, so marking a task complete immediately
+# subtracts that task's weighted hours and the value remains persistent
+# across restarts rather than resetting to 458.
+REFERENCE_REMAINING_HOURS = 458.0
+REFERENCE_INCOMPLETE_TASK_DAYS = 142
+HOURS_PER_TASK_DAY = REFERENCE_REMAINING_HOURS / REFERENCE_INCOMPLETE_TASK_DAYS
 
 OWNER_KEYS = ['Cyrus', 'Mya', 'Ana', 'Nick', 'Jase']
 
