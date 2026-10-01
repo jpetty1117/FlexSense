@@ -441,7 +441,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fo
   height: min(62vh, 620px);
   min-height: 460px;
   background:
-    radial-gradient(circle at 50% 35%, rgba(255,255,255,.95), rgba(235,244,250,.74) 62%, rgba(221,234,243,.8));
+    radial-gradient(circle at 50% 35%, #c8cdd1 0%, #aeb6bd 62%, #969fa7 100%);
   overflow: hidden;
 }
 .cad-viewer canvas { display: block; width: 100%; height: 100%; touch-action: none; }

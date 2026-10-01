@@ -84,7 +84,7 @@
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputEncoding = THREE.sRGBEncoding;
-  renderer.setClearColor(0xf8fbfd, 1);
+  renderer.setClearColor(0xaeb6bd, 1);
   viewer.prepend(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -128,10 +128,16 @@
     const c = color && color.length >= 3
       ? new THREE.Color(color[0], color[1], color[2])
       : new THREE.Color(0xb8cad8);
+
+    // STEP files often arrive with pure-white face colors. Tone every face
+    // down just a little so white parts remain light, but are easy to see
+    // against the gray viewer background.
+    c.multiplyScalar(0.86);
+
     return new THREE.MeshStandardMaterial({
       color: c,
-      roughness: 0.72,
-      metalness: 0.05,
+      roughness: 0.78,
+      metalness: 0.04,
       side: THREE.DoubleSide,
       wireframe,
     });
@@ -181,7 +187,7 @@
     mesh.name = geometryMesh.name || 'CAD part';
 
     const edgesGeometry = new THREE.EdgesGeometry(geometry, 35);
-    const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x466173, transparent: true, opacity: 0.34 });
+    const edgeMaterial = new THREE.LineBasicMaterial({ color: 0x34434d, transparent: true, opacity: 0.52 });
     const edges = new THREE.LineSegments(edgesGeometry, edgeMaterial);
     edges.userData.isCadEdge = true;
     mesh.add(edges);

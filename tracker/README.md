@@ -90,3 +90,19 @@ The interactive STEP viewer uses Three.js and `occt-import-js` (OpenCascade WebA
 2. Choose **+ New design**, name it `FlexSense Assembly`, add a short change summary, and upload your STEP file.
 3. Later, choose `FlexSense Assembly` from the Design dropdown and upload the next STEP file. It becomes Version 2 automatically while Version 1 stays available in the history.
 4. Open any version and edit its **What changed?** and **Detailed notes** fields for documentation.
+
+
+## Current work-hour calibration
+
+The task dashboard is calibrated to **458 estimated work hours remaining** for the
+current included tracker state. Task hours are weighted by each task's planned
+duration. When a task is marked complete, its weighted hours are removed from the
+remaining total automatically; reopening it adds those hours back.
+
+The CAD viewer uses a medium neutral gray background to improve contrast for light
+or white STEP models.
+
+## Latest adjustments
+- CAD STEP materials are rendered about 14% darker than their source face color so bright-white models remain visible against the gray viewer background.
+- The starting BOM data has been replaced with the latest uploaded `Parts List (1).xlsx` contents (20 line items). The included workbook is saved as `Parts List.xlsx` in this package.
+- The latest BOM includes the updated McMaster rail entries, ADC cable, framing items, dimensions/extra data, and source hyperlinks available in the workbook.
