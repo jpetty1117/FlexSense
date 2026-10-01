@@ -10,15 +10,40 @@
   */
 
 #include "telemetry.h"
+#include "usbd_cdc_if.h"
 #include <string.h>
 #include <strings.h>
 
 #define CMD_BUF_SIZE 64
+#define RX_RING_BUF_SIZE 128
 
 /* Private Module Variables */
 static UART_HandleTypeDef *s_huart = NULL;
 static char                s_cmd_buf[CMD_BUF_SIZE];
 static uint8_t             s_cmd_idx = 0;
+
+static uint8_t             s_rx_ring[RX_RING_BUF_SIZE];
+static volatile uint8_t    s_rx_head = 0;
+static volatile uint8_t    s_rx_tail = 0;
+
+/**
+  * @brief  Feeds raw data received from USB CDC into the telemetry ring buffer.
+  * @param  data: Pointer to incoming byte buffer.
+  * @param  len: Length in bytes.
+  * @retval None
+  */
+void Telemetry_FeedUsbData(const uint8_t *data, uint32_t len)
+{
+  for ( uint32_t i = 0; i < len; i++ )
+  {
+    uint8_t next = (uint8_t)( (s_rx_head + 1) % RX_RING_BUF_SIZE );
+    if ( next != s_rx_tail )
+    {
+      s_rx_ring[s_rx_head] = data[i];
+      s_rx_head = next;
+    }
+  }
+}
 
 /**
   * @brief  Initialize telemetry module with target UART peripheral handle.
@@ -29,84 +54,111 @@ void Telemetry_Init(UART_HandleTypeDef *huart)
 {
   s_huart = huart;
   s_cmd_idx = 0;
+  s_rx_head = 0;
+  s_rx_tail = 0;
   memset(s_cmd_buf, 0, sizeof(s_cmd_buf));
 } /* Telemetry_Init() */
 
 /**
-  * @brief  Non-blocking poll for incoming ASCII host commands over UART.
+  * @brief  Helper to parse a single incoming character into system commands.
+  * @param  c: Incoming character.
+  * @retval SystemCommand_t: Parsed command code or CMD_NONE.
+  */
+static SystemCommand_t ProcessIncomingChar(char c)
+{
+  if ( (c == '\r') || (c == '\n') )
+  {
+    if ( s_cmd_idx > 0 )
+    {
+      s_cmd_buf[s_cmd_idx] = '\0';
+      s_cmd_idx = 0;
+
+      if ( (strcasecmp(s_cmd_buf, "START") == 0) || (strcasecmp(s_cmd_buf, "S") == 0) )
+      {
+        return CMD_START;
+      }
+      else if ( (strcasecmp(s_cmd_buf, "STOP") == 0) || (strcasecmp(s_cmd_buf, "P") == 0) )
+      {
+        return CMD_STOP;
+      }
+      else if ( (strcasecmp(s_cmd_buf, "ZERO") == 0) || (strcasecmp(s_cmd_buf, "Z") == 0) )
+      {
+        return CMD_ZERO;
+      }
+      else if ( (strcasecmp(s_cmd_buf, "STATUS") == 0) || (strcasecmp(s_cmd_buf, "?") == 0) )
+      {
+        return CMD_STATUS;
+      }
+    }
+  }
+  else
+  {
+    if ( s_cmd_idx < (CMD_BUF_SIZE - 1) )
+    {
+      /* Ignore leading whitespace */
+      if ( !( (s_cmd_idx == 0) && ((c == ' ') || (c == '\t')) ) )
+      {
+        s_cmd_buf[s_cmd_idx++] = c;
+      }
+    }
+    else
+    {
+      s_cmd_idx = 0; /* Buffer overflow protection */
+    }
+  }
+
+  return CMD_NONE;
+}
+
+/**
+  * @brief  Non-blocking poll for incoming ASCII host commands over UART and USB CDC.
   * @param  None
   * @retval SystemCommand_t: Parsed command code or CMD_NONE.
   */
 SystemCommand_t Telemetry_PollCommand(void)
 {
-  if ( s_huart == NULL )
+  /* 1. Poll UART RX if configured */
+  if ( s_huart != NULL )
   {
-    return CMD_NONE;
-  }
-
-  /* Clear UART overrun flag if active */
-  if ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) )
-  {
-    __HAL_UART_CLEAR_OREFLAG(s_huart);
-  }
-
-  while ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_RXNE) )
-  {
-    char c = (char)(s_huart->Instance->DR & 0xFF);
-
-    if ( (c == '\r') || (c == '\n') )
+    if ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) )
     {
-      if ( s_cmd_idx > 0 )
-      {
-        s_cmd_buf[s_cmd_idx] = '\0';
-        s_cmd_idx = 0;
+      __HAL_UART_CLEAR_OREFLAG(s_huart);
+    }
 
-        if ( (strcasecmp(s_cmd_buf, "START") == 0) || (strcasecmp(s_cmd_buf, "S") == 0) )
-        {
-          return CMD_START;
-        }
-        else if ( (strcasecmp(s_cmd_buf, "STOP") == 0) || (strcasecmp(s_cmd_buf, "P") == 0) )
-        {
-          return CMD_STOP;
-        }
-        else if ( (strcasecmp(s_cmd_buf, "ZERO") == 0) || (strcasecmp(s_cmd_buf, "Z") == 0) )
-        {
-          return CMD_ZERO;
-        }
-        else if ( (strcasecmp(s_cmd_buf, "STATUS") == 0) || (strcasecmp(s_cmd_buf, "?") == 0) )
-        {
-          return CMD_STATUS;
-        }
+    while ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_RXNE) )
+    {
+      char c = (char)(s_huart->Instance->DR & 0xFF);
+      SystemCommand_t cmd = ProcessIncomingChar(c);
+      if ( cmd != CMD_NONE )
+      {
+        return cmd;
       }
     }
-    else
+  }
+
+  /* 2. Poll USB CDC ring buffer */
+  while ( s_rx_tail != s_rx_head )
+  {
+    char c = (char)s_rx_ring[s_rx_tail];
+    s_rx_tail = (uint8_t)( (s_rx_tail + 1) % RX_RING_BUF_SIZE );
+    SystemCommand_t cmd = ProcessIncomingChar(c);
+    if ( cmd != CMD_NONE )
     {
-      if ( s_cmd_idx < (CMD_BUF_SIZE - 1) )
-      {
-        /* Ignore leading whitespace */
-        if ( !( (s_cmd_idx == 0) && ((c == ' ') || (c == '\t')) ) )
-        {
-          s_cmd_buf[s_cmd_idx++] = c;
-        }
-      }
-      else
-      {
-        s_cmd_idx = 0; /* Buffer overflow protection */
-      }
+      return cmd;
     }
-  } /* while ( RXNE ) */
+  }
 
   return CMD_NONE;
 } /* Telemetry_PollCommand() */
 
 /**
-  * @brief  Transmits a 28-byte binary telemetry packet with CRC16 over UART.
+  * @brief  Transmits a 28-byte binary telemetry packet with CRC16 over UART & USB CDC.
   * @param  pkt: Pointer to TelemetryPacket_t structure to send.
   * @retval None
   */
 void Telemetry_SendPacket(TelemetryPacket_t *pkt)
 {
-  if ( (s_huart == NULL) || (pkt == NULL) )
+  if ( pkt == NULL )
   {
     return;
   }
@@ -115,20 +167,36 @@ void Telemetry_SendPacket(TelemetryPacket_t *pkt)
   pkt->preamble[1] = TELEMETRY_PREAMBLE_1;
   pkt->crc16 = Telemetry_ComputeCRC16((const uint8_t *)pkt, sizeof(TelemetryPacket_t) - sizeof(uint16_t));
 
-  HAL_UART_Transmit(s_huart, (uint8_t *)pkt, sizeof(TelemetryPacket_t), 10);
+  /* Transmit over hardware UART if initialized */
+  if ( s_huart != NULL )
+  {
+    HAL_UART_Transmit(s_huart, (uint8_t *)pkt, sizeof(TelemetryPacket_t), 10);
+  }
+
+  /* Transmit over USB CDC Virtual COM port */
+  CDC_Transmit_FS((uint8_t *)pkt, sizeof(TelemetryPacket_t));
 } /* Telemetry_SendPacket() */
 
 /**
-  * @brief  Transmits an ASCII text line (e.g. ACK banner or status response).
+  * @brief  Transmits an ASCII text line over UART & USB CDC.
   * @param  msg: Null-terminated string.
   * @retval None
   */
 void Telemetry_SendAck(const char *msg)
 {
-  if ( (s_huart != NULL) && (msg != NULL) )
+  if ( msg == NULL )
+  {
+    return;
+  }
+
+  /* Transmit over hardware UART if initialized */
+  if ( s_huart != NULL )
   {
     HAL_UART_Transmit(s_huart, (const uint8_t *)msg, (uint16_t)strlen(msg), 100);
   }
+
+  /* Transmit over USB CDC Virtual COM port */
+  CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
 } /* Telemetry_SendAck() */
 
 /**
