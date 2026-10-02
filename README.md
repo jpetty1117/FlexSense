@@ -6,7 +6,7 @@ FlexSense is an active physical therapy and rehabilitation device for upper-limb
 
 ## System Architecture Overview
 
-The FlexSense platform consists of three integrated software layers working together over real-time communication protocols:
+The FlexSense platform consists of two integrated software layers working together over real-time communication protocols:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -19,12 +19,6 @@ The FlexSense platform consists of three integrated software layers working toge
 │                    Embedded Firmware (STM32F401RE)                      │
 │  - 10ms Real-Time Control Scheduler             - Load Cell Force API   │
 │  - TIM2 4X Encoder Kinematics (0.15° Res)       - MAX30102 SpO2 Vitals  │
-└─────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│                Project Tracker Web Application (Flask/Docker)           │
-│  - Agile Sprint & Task Management               - BOM & CAD Step Viewer │
-│  - Password-Protected Workspace Portal          - Automated PPTX Deck   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,7 +68,7 @@ squish-therapy/
 │       ├── create_client.py    # New patient registration form
 │       ├── history_viewer.py   # Session replay, metrics analytics, & CSV export
 │       └── live_test.py        # Real-time 60 FPS plotting & hardware control interface
-└── tracker/                # Team Management & Planning Web Application (Flask)
+└── tracker/                # Internal PM tool (Flask web app for tasks, BOM, & CAD tracking)
     ├── app.py              # Flask server, password authentication, & API routes
     ├── tracker_core.py     # Task state, BOM management, & labor calculation engine
     ├── pptx_export.py      # Automated PowerPoint slide deck generator
@@ -119,17 +113,17 @@ The desktop monitoring application is built in Python using **PySide6** and **Py
 
 ---
 
-## Project Tracker Web Application ([tracker/](file:///home/jpetty/squish-therapy/tracker))
+## Internal Project Management Tool ([tracker/](file:///home/jpetty/squish-therapy/tracker))
 
-A containerized Flask web application providing the team with centralized sprint planning, Bill of Materials (BOM) tracking, CAD assembly version management, and automated slide generation.
+> [!NOTE]
+> The tracker is an internal project management utility—not part of the FlexSense medical device runtime or patient therapy stack. It was built by the team's PM to organize deliverables and track project health throughout development.
 
-### Key Features
+The `tracker/` directory contains a standalone Flask web application used by the team to manage project operations:
 
-- **Password Protection:** Secure workspace authentication guarding team management data.
-- **Interactive Gantt & Task Planning:** Tracks task statuses, owners, labor hours, and milestone schedules.
-- **BOM & Inventory Management:** Part numbers, supplier links, pricing, and cost accumulation.
-- **CAD Version Viewer:** Integrated Three.js 3D canvas for reviewing STEP models directly in the web browser.
-- **Automated PPTX Generation:** Exports formatted slide decks summarizing labor status and project milestones directly for team reviews.
+- **Sprint & Task Planning:** Tracks task statuses, owners, labor hours, remaining pace calculations, and milestone schedules.
+- **Bill of Materials (BOM) & Budget:** Live component cost accumulation, vendor links, and inventory management against the project budget.
+- **CAD Model Versioning:** Integrated Three.js 3D STEP viewer and revision history for mechanical subassemblies.
+- **Automated PPTX Slide Generation:** One-click PowerPoint export (`pptx_export.py`) generating formatted weekly status decks for team reviews.
 
 ---
 
@@ -182,11 +176,17 @@ To verify raw binary packets directly over USB serial without running the GUI:
 ./firmware/monitor_binary.py
 ```
 
-### 5. Project Tracker Container (Docker)
+### 5. Internal Project Tracker (Optional)
+
+To run the team's internal PM dashboard:
 
 ```bash
 cd tracker
 
-# Build and start container in detached mode
-docker compose up -d --build
+# Install dependencies and start Flask server
+pip install -r requirements.txt
+python app.py
+
+# Alternatively, run via Docker:
+# docker compose up -d --build
 ```
