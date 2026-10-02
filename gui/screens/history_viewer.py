@@ -64,7 +64,7 @@ class HistoryViewerScreen(QWidget):
         # Left: Session list + info
         self.left_panel = QFrame()
         self.left_panel.setObjectName("card")
-        self.left_panel.setFixedWidth(250)
+        self.left_panel.setFixedWidth(270)
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(12, 12, 12, 12)
         left_layout.setSpacing(8)
@@ -74,6 +74,7 @@ class HistoryViewerScreen(QWidget):
         left_layout.addWidget(lbl_sessions)
 
         self.session_list = QListWidget()
+        self.session_list.setWordWrap(True)
         self.session_list.currentRowChanged.connect(self._on_session_selected)
         left_layout.addWidget(self.session_list)
 
@@ -373,9 +374,8 @@ class HistoryViewerScreen(QWidget):
             session_num = total - i
             date_str = session['date'][:10] if session['date'] else 'Unknown'
             item_text = (
-                f"Session #{session_num} — {date_str}\n"
-                f"  Resistance: {session['target_resistance']} lbs | "
-                f"Max ROM: {session['target_angle']}°"
+                f"Session #{session_num} • {date_str}\n"
+                f"  Load: {session['target_resistance']} lbs  •  Peak: {session['target_angle']}°"
             )
             item = QListWidgetItem(item_text)
             item.setData(Qt.UserRole, session['id'])

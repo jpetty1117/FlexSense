@@ -187,6 +187,15 @@ float LoadCell_ReadForceLbs(void)
 {
   if (!s_is_ready)
   {
+    /* Attempt auto-recovery periodically (every 1.0s) if disconnected */
+    static uint32_t s_reinit_tick = 0;
+    uint32_t now = HAL_GetTick();
+    if ((now - s_reinit_tick) >= 1000)
+    {
+      s_reinit_tick = now;
+      MX_I2C1_Init();
+      LoadCell_Init();
+    }
     return 0.0f;
   }
 

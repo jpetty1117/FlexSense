@@ -143,11 +143,14 @@ class STM32EncoderInterface:
         self.rx_buffer.clear()
 
     def zero(self):
-        """Reset encoder position to 0."""
+        """Reset encoder position to 0 and tare load cell."""
+        if not self.is_connected:
+            self.connect()
         if self.is_connected:
             self.send_command("ZERO")
             self.last_angle = 0.0
             self.last_velocity = 0.0
+            self.last_load_cell = 0.0
 
     def read_samples(self):
         """

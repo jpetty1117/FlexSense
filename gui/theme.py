@@ -78,10 +78,10 @@ STYLESHEET = f"""
         color: {COLORS['text_primary']};
         border: 1px solid {COLORS['border']};
         border-radius: 8px;
-        padding: 12px 24px;
-        font-size: 15px;
+        padding: 6px 14px;
+        font-size: 14px;
         font-weight: bold;
-        min-width: 120px;
+        min-width: 0px;
     }}
 
     QPushButton:hover {{
@@ -98,6 +98,9 @@ STYLESHEET = f"""
         background-color: {COLORS['accent_dark']};
         border-color: {COLORS['accent']};
         color: white;
+        padding: 10px 22px;
+        font-size: 15px;
+        min-width: 120px;
     }}
 
     QPushButton#primary:hover {{
@@ -108,6 +111,9 @@ STYLESHEET = f"""
         background-color: #5c1a1a;
         border-color: {COLORS['danger']};
         color: {COLORS['danger']};
+        padding: 10px 22px;
+        font-size: 15px;
+        min-width: 100px;
     }}
 
     QPushButton#danger:hover {{
