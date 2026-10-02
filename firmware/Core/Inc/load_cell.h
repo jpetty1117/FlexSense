@@ -5,7 +5,7 @@
   * ESET-469 Embedded Real Time Software Development
   * Author: Squish Therapy
   * File: load_cell.h
-  * Brief: Interface for handle load cell force acquisition and calibration.
+  * Brief: Interface for handle load cell force acquisition (NAU7802 24-bit ADC via I2C).
   ******************************************************************************
   */
 
@@ -21,10 +21,13 @@ extern "C" {
 #include <stdbool.h>
 
 /* Public Function Prototypes */
-void  LoadCell_Init(void);
-float LoadCell_ReadForceLbs(void);
-void  LoadCell_Tare(void);
-bool  LoadCell_IsConnected(void);
+void    LoadCell_Init(void);
+float   LoadCell_ReadForceLbs(void);
+void    LoadCell_Tare(void);
+bool    LoadCell_IsConnected(void);
+int32_t LoadCell_GetRawCount(void);
+void    LoadCell_SetCalibrationScale(float lbs_per_count);
+float   LoadCell_GetCalibrationScale(void);
 
 #ifdef __cplusplus
 }

@@ -174,7 +174,9 @@ void Telemetry_SendPacket(TelemetryPacket_t *pkt)
   }
 
   /* Transmit over USB CDC Virtual COM port */
-  CDC_Transmit_FS((uint8_t *)pkt, sizeof(TelemetryPacket_t));
+  static uint8_t s_usb_pkt_buf[sizeof(TelemetryPacket_t)];
+  memcpy(s_usb_pkt_buf, pkt, sizeof(TelemetryPacket_t));
+  CDC_Transmit_FS(s_usb_pkt_buf, sizeof(TelemetryPacket_t));
 } /* Telemetry_SendPacket() */
 
 /**
@@ -196,7 +198,14 @@ void Telemetry_SendAck(const char *msg)
   }
 
   /* Transmit over USB CDC Virtual COM port */
-  CDC_Transmit_FS((uint8_t *)msg, (uint16_t)strlen(msg));
+  static uint8_t s_ack_buf[128];
+  uint16_t len = (uint16_t)strlen(msg);
+  if ( len > sizeof(s_ack_buf) )
+  {
+    len = sizeof(s_ack_buf);
+  }
+  memcpy(s_ack_buf, msg, len);
+  CDC_Transmit_FS(s_ack_buf, len);
 } /* Telemetry_SendAck() */
 
 /**

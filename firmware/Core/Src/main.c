@@ -25,6 +25,7 @@
 #include "tim.h"
 #include "gpio.h"
 #include "usb_device.h"
+#include "i2c.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -97,6 +98,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM2_Init();
+  MX_I2C1_Init();
   MX_USB_DEVICE_Init();
   MX_USART2_UART_Init();
 
@@ -110,9 +112,11 @@ int main(void)
 
   Telemetry_SendAck("\r\n=== STM32F411CE FlexSense Embedded System Ready ===\r\n");
   Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS\r\n");
-  Telemetry_SendAck("Packet: 28B [0xAA 0x55, time_u32, ang_f, vel_f, load_f, effort_f, spo2_f, crc16_u16]\r\n");
+  /* Indicate boot by turning ON LED (PC13 active-low) */
+  HAL_GPIO_WritePin(LED_PIN_GPIO_Port, LED_PIN_Pin, GPIO_PIN_RESET);
 
-  s_sys_state = SYS_STATE_IDLE;
+  /* Start in STREAMING state by default so packets flow immediately on connection */
+  s_sys_state = SYS_STATE_STREAMING;
   s_last_tick = HAL_GetTick();
   /* USER CODE END 2 */
 
@@ -131,6 +135,7 @@ int main(void)
       case CMD_START:
         s_sys_state = SYS_STATE_STREAMING;
         Encoder_Zero();
+        LoadCell_Tare();
         Telemetry_SendAck("ACK:START\r\n");
         break;
 
@@ -141,11 +146,17 @@ int main(void)
 
       case CMD_ZERO:
         Encoder_Zero();
+        LoadCell_Tare();
         Telemetry_SendAck("ACK:ZERO\r\n");
         break;
 
       case CMD_STATUS:
-        Telemetry_SendAck("ACK:STATUS:ONLINE\r\n");
+        {
+          char st_msg[96];
+          snprintf(st_msg, sizeof(st_msg), "ACK:STATUS:ONLINE,LC=%d,RAW=%ld,LBS=%.2f\r\n",
+                   LoadCell_IsConnected(), (long)LoadCell_GetRawCount(), LoadCell_ReadForceLbs());
+          Telemetry_SendAck(st_msg);
+        }
         break;
 
       case CMD_NONE:
@@ -162,6 +173,14 @@ int main(void)
 
       /* Update kinematics differentiation */
       Encoder_UpdateVelocity(now);
+
+      /* Heartbeat LED: toggle every 500ms to indicate healthy execution */
+      static uint32_t s_led_tick = 0;
+      if ( (now - s_led_tick) >= 500 )
+      {
+        s_led_tick = now;
+        HAL_GPIO_TogglePin(LED_PIN_GPIO_Port, LED_PIN_Pin);
+      }
 
       /* In STREAMING state, transmit 28-byte binary telemetry frame */
       if ( s_sys_state == SYS_STATE_STREAMING )
