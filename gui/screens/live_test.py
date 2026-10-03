@@ -943,8 +943,10 @@ class LiveTestScreen(QWidget):
             }}
         """)
 
-        ok, _ = self.hw.connect()
-        if ok:
+        if not self.hw.is_connected:
+            self.hw.connect()
+
+        if self.hw.is_connected:
             self.hw.start_streaming()
             self.lbl_status.setText("● RECORDING (Live)")
             self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")

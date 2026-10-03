@@ -83,12 +83,23 @@ class STM32EncoderInterface:
         if not target_port:
             return False, "No serial port found (/dev/ttyACM*)"
 
+        # Avoid reopening if already connected and open on the target port
+        if self.ser and self.ser.is_open and self.is_connected and (self.port == target_port):
+            return True, f"Already connected to {target_port}"
+
+        # Cleanly close previous handle if open
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+
         try:
             self.ser = serial.Serial(target_port, self.baudrate, timeout=0.05)
             self.port = target_port
             self.is_connected = True
             self.rx_buffer.clear()
-            time.sleep(0.1)
+            time.sleep(0.05)
             self.ser.reset_input_buffer()
             # Send STOP to ensure it starts in IDLE
             self.send_command("STOP")
@@ -206,8 +217,8 @@ class STM32EncoderInterface:
                     # Return formatted sample tuple
                     samples.append((t_ms, 0, angle, vel, load, iq, spo2))
                 else:
-                    # CRC error: preamble was a false positive, advance by 1 to re-sync
-                    self.rx_buffer.insert(0, pkt_bytes[1])
+                    # CRC error: preamble was a false positive, advance by 1 byte to re-sync
+                    self.rx_buffer = bytearray(pkt_bytes[1:]) + self.rx_buffer
 
         except Exception:
             self.is_connected = False
