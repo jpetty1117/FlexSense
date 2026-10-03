@@ -62,8 +62,8 @@ def main():
     # Send START
     ser.write(b"START\r\n")
     print("Sent START. Streaming binary packets (Press Ctrl+C to stop)...\n")
-    print(f"{'Time (ms)':<10} {'Angle (deg)':<14} {'Velocity (deg/s)':<18} {'Load':<8} {'Effort':<8} {'SpO2 (%)':<10} {'CRC':<8}")
-    print("-" * 80)
+    print(f"{'Time (ms)':<10} {'Angle (deg)':<14} {'Velocity (deg/s)':<18} {'Load (lb)':<10} {'Effort':<8} {'SpO2 (%)':<10} {'CRC':<8}")
+    print("-" * 84)
 
     buf = bytearray()
     try:
@@ -88,7 +88,7 @@ def main():
                 expected_crc = struct.unpack("<H", pkt[-2:])[0]
                 if compute_crc16(pkt[:-2]) == expected_crc:
                     _, _, t_ms, angle, vel, load, iq, spo2, crc = struct.unpack("<BB I f f f f f H", pkt)
-                    print(f"{t_ms:<10} {angle:<14.2f} {vel:<18.1f} {load:<8.2f} {iq:<8.1f} {spo2:<10.1f} {hex(crc):<8}")
+                    print(f"{t_ms:<10} {angle:<14.2f} {vel:<18.1f} {load:<10.2f} {iq:<8.1f} {spo2:<10.1f} {hex(crc):<8}")
                 else:
                     buf.insert(0, pkt[1])
     except KeyboardInterrupt:

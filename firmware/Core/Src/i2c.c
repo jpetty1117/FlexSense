@@ -36,29 +36,32 @@ void I2C1_ClearBus(void)
   for (int i = 0; i < 9; i++)
   {
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);
-    for (volatile int d = 0; d < 120; d++);
+    for (volatile int d = 0; d < 600; d++);
     HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-    for (volatile int d = 0; d < 120; d++);
+    for (volatile int d = 0; d < 600; d++);
   }
 
   /* Generate I2C STOP condition: SDA low then high while SCL is high */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
-  for (volatile int d = 0; d < 120; d++);
+  for (volatile int d = 0; d < 600; d++);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
-  for (volatile int d = 0; d < 120; d++);
+  for (volatile int d = 0; d < 600; d++);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
-  for (volatile int d = 0; d < 120; d++);
+  for (volatile int d = 0; d < 600; d++);
 }
 
 /* I2C1 init function */
 void MX_I2C1_Init(void)
 {
+  hi2c1.Instance = I2C1;
+  HAL_I2C_DeInit(&hi2c1);
+
   /* 1. Clear bus of any stuck slave before configuring peripheral */
   I2C1_ClearBus();
 
   /* 2. Reset I2C1 peripheral state */
   __HAL_RCC_I2C1_FORCE_RESET();
-  for (volatile int d = 0; d < 200; d++);
+  for (volatile int d = 0; d < 500; d++);
   __HAL_RCC_I2C1_RELEASE_RESET();
 
   hi2c1.Instance = I2C1;

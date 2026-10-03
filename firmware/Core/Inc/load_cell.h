@@ -26,6 +26,8 @@ float   LoadCell_ReadForceLbs(void);
 void    LoadCell_Tare(void);
 bool    LoadCell_IsConnected(void);
 int32_t LoadCell_GetRawCount(void);
+uint8_t LoadCell_GetInitStep(void);
+void    LoadCell_Diagnose(char *out_buf, size_t max_len);
 void    LoadCell_SetCalibrationScale(float lbs_per_count);
 float   LoadCell_GetCalibrationScale(void);
 

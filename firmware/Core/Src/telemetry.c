@@ -93,17 +93,21 @@ static SystemCommand_t ProcessIncomingChar(char c)
   }
   else
   {
-    if ( s_cmd_idx < (CMD_BUF_SIZE - 1) )
+    /* Only accept printable ASCII characters (0x20 space through 0x7E ~) to ignore noise/glitches */
+    if ( (c >= ' ') && (c <= '~') )
     {
-      /* Ignore leading whitespace */
-      if ( !( (s_cmd_idx == 0) && ((c == ' ') || (c == '\t')) ) )
+      if ( s_cmd_idx < (CMD_BUF_SIZE - 1) )
       {
-        s_cmd_buf[s_cmd_idx++] = c;
+        /* Ignore leading whitespace */
+        if ( !( (s_cmd_idx == 0) && ((c == ' ') || (c == '\t')) ) )
+        {
+          s_cmd_buf[s_cmd_idx++] = c;
+        }
       }
-    }
-    else
-    {
-      s_cmd_idx = 0; /* Buffer overflow protection */
+      else
+      {
+        s_cmd_idx = 0; /* Buffer overflow protection */
+      }
     }
   }
 
@@ -120,7 +124,9 @@ SystemCommand_t Telemetry_PollCommand(void)
   /* 1. Poll UART RX if configured */
   if ( s_huart != NULL )
   {
-    if ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) )
+    if ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) ||
+         __HAL_UART_GET_FLAG(s_huart, UART_FLAG_FE)  ||
+         __HAL_UART_GET_FLAG(s_huart, UART_FLAG_NE) )
     {
       __HAL_UART_CLEAR_OREFLAG(s_huart);
     }

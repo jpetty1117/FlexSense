@@ -115,8 +115,8 @@ int main(void)
   /* Indicate boot by turning ON LED (PC13 active-low) */
   HAL_GPIO_WritePin(LED_PIN_GPIO_Port, LED_PIN_Pin, GPIO_PIN_RESET);
 
-  /* Start in STREAMING state by default so packets flow immediately on connection */
-  s_sys_state = SYS_STATE_STREAMING;
+  /* Start in IDLE state by default so USB is quiet until host connects and sends START */
+  s_sys_state = SYS_STATE_IDLE;
   s_last_tick = HAL_GetTick();
   /* USER CODE END 2 */
 
@@ -152,9 +152,8 @@ int main(void)
 
       case CMD_STATUS:
         {
-          char st_msg[96];
-          snprintf(st_msg, sizeof(st_msg), "ACK:STATUS:ONLINE,LC=%d,RAW=%ld,LBS=%.2f\r\n",
-                   LoadCell_IsConnected(), (long)LoadCell_GetRawCount(), LoadCell_ReadForceLbs());
+          char st_msg[128];
+          LoadCell_Diagnose(st_msg, sizeof(st_msg));
           Telemetry_SendAck(st_msg);
         }
         break;
@@ -174,6 +173,9 @@ int main(void)
       /* Update kinematics differentiation */
       Encoder_UpdateVelocity(now);
 
+      /* Always sample load cell so s_last_raw and tare baseline remain fresh in all states */
+      float current_force = LoadCell_ReadForceLbs();
+
       /* Heartbeat LED: toggle every 500ms to indicate healthy execution */
       static uint32_t s_led_tick = 0;
       if ( (now - s_led_tick) >= 500 )
@@ -189,7 +191,7 @@ int main(void)
         pkt.timestamp_ms   = now;
         pkt.angle_deg      = Encoder_GetAngleDeg();
         pkt.velocity_deg_s = Encoder_GetVelocityDegS();
-        pkt.load_cell      = LoadCell_ReadForceLbs();
+        pkt.load_cell      = current_force;
         pkt.motor_iq_a     = Motor_GetIqCurrent();
         pkt.spo2           = SpO2_ReadPercent();
 
