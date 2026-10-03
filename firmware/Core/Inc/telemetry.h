@@ -51,12 +51,15 @@ typedef enum {
   CMD_START,
   CMD_STOP,
   CMD_ZERO,
-  CMD_STATUS
+  CMD_STATUS,
+  CMD_SET_RESISTANCE,
+  CMD_TMC
 } SystemCommand_t;
 
 /* Public Function Prototypes */
 void            Telemetry_Init(UART_HandleTypeDef *huart);
 SystemCommand_t Telemetry_PollCommand(void);
+float           Telemetry_GetCommandParam(void);
 void            Telemetry_SendPacket(TelemetryPacket_t *pkt);
 void            Telemetry_SendAck(const char *msg);
 uint16_t        Telemetry_ComputeCRC16(const uint8_t *data, size_t length);

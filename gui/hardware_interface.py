@@ -123,7 +123,7 @@ class STM32EncoderInterface:
         self.rx_buffer.clear()
 
     def send_command(self, cmd):
-        """Send an ASCII text command (e.g. 'START', 'STOP', 'ZERO', '?') to the STM32."""
+        """Send an ASCII text command (e.g. 'START', 'STOP', 'ZERO', 'RES 10.0', '?') to the STM32."""
         if not self.ser or not self.ser.is_open:
             return False
         try:
@@ -133,16 +133,49 @@ class STM32EncoderInterface:
         except Exception:
             return False
 
-    def start_streaming(self):
-        """Zero the encoder and command the STM32 to begin 50 Hz binary telemetry stream."""
+    def set_resistance(self, resistance_lbs: float) -> bool:
+        """
+        Send commanded resistance to the STM32 Series Elastic Actuator controller.
+
+        Parameters:
+            resistance_lbs (float): Target brake resistance in pounds (0.0 to 25.0 lbf).
+
+        Returns:
+            bool: True if transmitted successfully.
+        """
+        if not self.is_connected:
+            return False
+        return self.send_command(f"RES {float(resistance_lbs):.2f}")
+
+    def start_streaming(self, target_resistance: float = None):
+        """Zero the encoder, configure resistance, and command the STM32 to begin 50 Hz binary telemetry stream."""
         if not self.is_connected:
             ok, _ = self.connect()
             if not ok:
                 return False
+        # Purge any stale bytes left in the OS serial buffer before starting
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
+            except Exception:
+                pass
         self.rx_buffer.clear()
+        self.last_timestamp_ms = 0
         self.send_command("ZERO")
         time.sleep(0.02)
+        if target_resistance is not None:
+            self.set_resistance(target_resistance)
+            time.sleep(0.02)
         self.send_command("START")
+        time.sleep(0.01)
+        # Clear any echo/command ACK bytes so binary framing starts clean
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.reset_input_buffer()
+            except Exception:
+                pass
+        self.rx_buffer.clear()
         self.is_streaming = True
         return True
 
@@ -150,6 +183,12 @@ class STM32EncoderInterface:
         """Command the STM32 to stop streaming telemetry."""
         if self.is_connected:
             self.send_command("STOP")
+            time.sleep(0.02)
+            if self.ser and self.ser.is_open:
+                try:
+                    self.ser.reset_input_buffer()
+                except Exception:
+                    pass
         self.is_streaming = False
         self.rx_buffer.clear()
 

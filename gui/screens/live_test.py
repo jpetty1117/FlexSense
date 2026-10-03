@@ -777,6 +777,8 @@ class LiveTestScreen(QWidget):
         self.plot_force.setYRange(0, max(25.0, val * 1.6), padding=0)
         if self.last_deficit_angle is None:
             self.lbl_hud_force_sub.setText(f"Peak: {getattr(self, 'max_session_force', 0.0):.1f} lbs • Target: {val:.1f} lbs")
+        if getattr(self, 'is_running', False) and getattr(self, 'hw', None) and self.hw.is_connected:
+            self.hw.set_resistance(val)
 
     def _zero_encoder(self):
         """Sends ZERO command to tare Nucleo rotary encoder and NAU7802 load cell."""
@@ -845,6 +847,13 @@ class LiveTestScreen(QWidget):
         self.curve_force_live.setData([], [])
         self.deficit_marker.setData([], [])
         self.deficit_callout.setText("")
+
+        # Reset plot viewports cleanly back to 0.0s
+        self.plot_rom.setXRange(0.0, self.time_window, padding=0)
+        if self.force_plot_mode == "TIME":
+            self.plot_force.setXRange(0.0, self.time_window, padding=0)
+        else:
+            self.plot_force.setXRange(0.0, 160.0, padding=0)
 
         self.lbl_hud_reps.setText("0 Reps")
         self.lbl_hud_reps_sub.setText("Target: 10 Reps")
@@ -922,6 +931,20 @@ class LiveTestScreen(QWidget):
         self.rep_force_buf = []
         self.session_baseline_rom = 0.0
 
+        # Clear curves and reset plot viewports cleanly to 0.0s for the new test
+        self.curve_rom.setData([], [])
+        self.curve_force_live.setData([], [])
+        self.deficit_marker.setData([], [])
+        self.deficit_callout.setText("")
+
+        self.plot_rom.setXRange(0.0, self.time_window, padding=0)
+        if self.force_plot_mode == "TIME":
+            self.plot_force.setXRange(0.0, self.time_window, padding=0)
+        else:
+            self.plot_force.setXRange(0.0, 160.0, padding=0)
+
+        self.lbl_timer.setText("0.0 s")
+
         self._start_time = time.time()
         self.elapsed_time = 0.0
         self.ticks = 0
@@ -947,7 +970,7 @@ class LiveTestScreen(QWidget):
             self.hw.connect()
 
         if self.hw.is_connected:
-            self.hw.start_streaming()
+            self.hw.start_streaming(target_resistance=target_resistance)
             self.lbl_status.setText("● RECORDING (Live)")
             self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
         else:
@@ -961,6 +984,7 @@ class LiveTestScreen(QWidget):
         self.is_running = False
 
         if self.hw.is_connected:
+            self.hw.set_resistance(0.0)
             self.hw.stop_streaming()
 
         self.lbl_status.setText("● COMPLETE — Save or Discard?")
@@ -1022,6 +1046,7 @@ class LiveTestScreen(QWidget):
         self.test_completed.emit(session_id)
 
     def _discard_test(self):
+        self._reset()
         self.lbl_status.setText("● DISCARDED")
         self.lbl_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['danger']};")
         self.btn_save.setVisible(False)
@@ -1043,7 +1068,6 @@ class LiveTestScreen(QWidget):
         """)
         self.spin_resistance.setEnabled(True)
         self.btn_zero.setEnabled(True)
-        self._reset()
 
     def _append_sample(self, t_val, rom, speed, force, spo2):
         self.full_time_data.append(t_val)
@@ -1149,7 +1173,7 @@ class LiveTestScreen(QWidget):
                     spo2 = float(sample[6]) if len(sample) > 6 else 98.0
                     if self._hw_start_ms is None:
                         self._hw_start_ms = t_ms
-                    sample_time = (t_ms - self._hw_start_ms) / 1000.0
+                    sample_time = max(0.0, (t_ms - self._hw_start_ms) / 1000.0)
                     force_val = max(0.0, float(load))
                     self._append_sample(sample_time, rom, speed, force_val, spo2)
                 new_data = True

@@ -60,6 +60,7 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 static SystemState_t s_sys_state = SYS_STATE_IDLE;
 static uint32_t      s_last_tick = 0;
+static uint32_t      s_stream_start_tick = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -111,7 +112,7 @@ int main(void)
   SpO2_Init();
 
   Telemetry_SendAck("\r\n=== STM32F411CE FlexSense Embedded System Ready ===\r\n");
-  Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS\r\n");
+  Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS, RES <lbs>\r\n");
   /* Indicate boot by turning ON LED (PC13 active-low) */
   HAL_GPIO_WritePin(LED_PIN_GPIO_Port, LED_PIN_Pin, GPIO_PIN_RESET);
 
@@ -136,12 +137,24 @@ int main(void)
         s_sys_state = SYS_STATE_STREAMING;
         Encoder_Zero();
         LoadCell_Tare();
+        s_stream_start_tick = HAL_GetTick();
         Telemetry_SendAck("ACK:START\r\n");
         break;
 
       case CMD_STOP:
         s_sys_state = SYS_STATE_IDLE;
+        Motor_SetResistanceLbs(0.0f);
         Telemetry_SendAck("ACK:STOP\r\n");
+        break;
+
+      case CMD_SET_RESISTANCE:
+        {
+          float r = Telemetry_GetCommandParam();
+          Motor_SetResistanceLbs(r);
+          char ack[48];
+          snprintf(ack, sizeof(ack), "ACK:RES:%.2f\r\n", r);
+          Telemetry_SendAck(ack);
+        }
         break;
 
       case CMD_ZERO:
@@ -158,12 +171,36 @@ int main(void)
         }
         break;
 
+      case CMD_TMC:
+        {
+          char tmc_msg[128];
+          if ( Motor_IsTMC2209Online() )
+          {
+            TMC2209_Status_t st;
+            Motor_GetTMC2209Status(&st);
+            snprintf(tmc_msg, sizeof(tmc_msg),
+                     "ACK:TMC:ONLINE=1,SG=%u,CS=%u,OTPW=%d,FAULT=%d\r\n",
+                     st.stallguard_result, st.current_scale,
+                     st.over_temperature_warning ? 1 : 0,
+                     st.driver_fault ? 1 : 0);
+          }
+          else
+          {
+            snprintf(tmc_msg, sizeof(tmc_msg), "ACK:TMC:ONLINE=0\r\n");
+          }
+          Telemetry_SendAck(tmc_msg);
+        }
+        break;
+
       case CMD_NONE:
       default:
         break;
     }
 
-    /* 2. Periodic 10ms real-time control & telemetry loop */
+    /* 2. Run non-blocking stepper pulse engine (checked on every loop iteration) */
+    Motor_StepTask();
+
+    /* 3. Periodic 10ms real-time control & telemetry loop */
     uint32_t now = HAL_GetTick();
 
     if ( (now - s_last_tick) >= TELEMETRY_INTERVAL_MS )
@@ -175,6 +212,9 @@ int main(void)
 
       /* Always sample load cell so s_last_raw and tare baseline remain fresh in all states */
       float current_force = LoadCell_ReadForceLbs();
+
+      /* Update Series Elastic Actuator dynamic brake controller (100 Hz, dt = 0.010 s) */
+      Motor_UpdateControl(current_force, Encoder_GetVelocityDegS(), 0.010f);
 
       /* Heartbeat LED: toggle every 500ms to indicate healthy execution */
       static uint32_t s_led_tick = 0;
@@ -188,7 +228,7 @@ int main(void)
       if ( s_sys_state == SYS_STATE_STREAMING )
       {
         TelemetryPacket_t pkt;
-        pkt.timestamp_ms   = now;
+        pkt.timestamp_ms   = now - s_stream_start_tick;
         pkt.angle_deg      = Encoder_GetAngleDeg();
         pkt.velocity_deg_s = Encoder_GetVelocityDegS();
         pkt.load_cell      = current_force;

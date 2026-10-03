@@ -13,6 +13,7 @@
 #include "usbd_cdc_if.h"
 #include <string.h>
 #include <strings.h>
+#include <stdlib.h>
 
 #define CMD_BUF_SIZE 64
 #define RX_RING_BUF_SIZE 128
@@ -21,10 +22,20 @@
 static UART_HandleTypeDef *s_huart = NULL;
 static char                s_cmd_buf[CMD_BUF_SIZE];
 static uint8_t             s_cmd_idx = 0;
+static float               s_cmd_param = 0.0f;
 
 static uint8_t             s_rx_ring[RX_RING_BUF_SIZE];
 static volatile uint8_t    s_rx_head = 0;
 static volatile uint8_t    s_rx_tail = 0;
+
+/**
+  * @brief  Read the parameter associated with the latest parsed command.
+  * @retval float: Parsed parameter value (e.g. resistance in lbs).
+  */
+float Telemetry_GetCommandParam(void)
+{
+  return s_cmd_param;
+}
 
 /**
   * @brief  Feeds raw data received from USB CDC into the telemetry ring buffer.
@@ -88,6 +99,24 @@ static SystemCommand_t ProcessIncomingChar(char c)
       else if ( (strcasecmp(s_cmd_buf, "STATUS") == 0) || (strcasecmp(s_cmd_buf, "?") == 0) )
       {
         return CMD_STATUS;
+      }
+      else if ( strcasecmp(s_cmd_buf, "TMC") == 0 )
+      {
+        return CMD_TMC;
+      }
+      else if ( (strncasecmp(s_cmd_buf, "RES", 3) == 0) || (strncasecmp(s_cmd_buf, "SET", 3) == 0) )
+      {
+        /* Support "RES 10.5", "RES:10.5", "RES=10.5", "SET 10.5", etc. */
+        const char *p = &s_cmd_buf[3];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, NULL);
+          return CMD_SET_RESISTANCE;
+        }
       }
     }
   }
