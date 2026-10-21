@@ -1,13 +1,11 @@
-/**
-  ******************************************************************************
-  * Texas A&M University
-  * Electronic Systems Engineering Technology
-  * ESET-469 Embedded Real Time Software Development
-  * Author: Squish Therapy
-  * File: load_cell.h
-  * Brief: Interface for handle load cell force acquisition (NAU7802 24-bit ADC via I2C).
-  ******************************************************************************
-  */
+/* Texas A&M University
+** Electronic Systems Engineering Technology
+** ESET-469 Embedded Real Time Software Development
+** Author: Squish Therapy
+** File: load_cell.h
+** --------
+** Interface for handle load cell force acquisition (NAU7802 24-bit ADC via I2C).
+*/
 
 #ifndef LOAD_CELL_H
 #define LOAD_CELL_H
@@ -19,6 +17,7 @@ extern "C" {
 #include "stm32f4xx_hal.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /* Public Function Prototypes */
 void    LoadCell_Init(void);

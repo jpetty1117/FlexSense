@@ -1,45 +1,48 @@
-/**
-  ******************************************************************************
-  * Texas A&M University
-  * Electronic Systems Engineering Technology
-  * ESET-469 Embedded Real Time Software Development
-  * Author: Squish Therapy
-  * File: motor.c
-  * Brief: Implementation of the Series Elastic Actuator (SEA) brake controller.
-  *        Combines feedforward lead-screw positioning with Laplace-tuned PI
-  *        handle load cell feedback trim and non-blocking stepper pulse engine.
-  ******************************************************************************
-  */
+/* Texas A&M University
+** Electronic Systems Engineering Technology
+** ESET-469 Embedded Real Time Software Development
+** Author: Squish Therapy
+** File: motor.c
+** --------
+** Implementation of the Series Elastic Actuator (SEA) brake controller.
+** Stepper carriage pulls compliant spring attached to bicycle brake handle
+** trigger (lever mechanical advantage) driving hydraulic disc brake caliper.
+** Combines feedforward lead-screw positioning with Laplace-tuned PI
+** handle load cell feedback trim and non-blocking stepper pulse engine.
+*/
 
 #include "motor.h"
 #include <math.h>
 #include <string.h>
 
 /* Private Module Variables */
-static float    s_target_resistance_lbs = 0.0f;
-static float    s_integral              = 0.0f;
-static float    s_feedforward_pos_mm    = 0.0f;
-static float    s_commanded_pos_mm      = 0.0f;
-static float    s_profiled_pos_mm       = 0.0f;
-static float    s_current_pos_mm        = 0.0f;
+static float            s_target_resistance_lbs = 0.0f;
+static float            s_integral              = 0.0f;
+static float            s_feedforward_pos_mm    = 0.0f;
+static float            s_commanded_pos_mm      = 0.0f;
+static float            s_profiled_pos_mm       = 0.0f;
+static float            s_current_pos_mm        = 0.0f;
 
-static int32_t  s_target_step           = 0;
-static int32_t  s_current_step          = 0;
-static uint32_t s_last_step_cycle       = 0;
+static int32_t          s_target_step           = 0;
+static int32_t          s_current_step          = 0;
+static uint32_t         s_last_step_cycle       = 0;
 
-static float    s_steps_per_mm          = MOTOR_STEPS_PER_MM;
-static bool     s_motor_enabled         = false;
-static bool     s_dir_inverted          = false;
+static float            s_steps_per_mm          = MOTOR_STEPS_PER_MM;
+static bool             s_motor_enabled         = false;
+static bool             s_dir_inverted          = false;
 
 /* TMC2209 UART State */
-static bool             s_tmc_online    = false;
+static bool             s_tmc_online            = false;
 static TMC2209_Status_t s_tmc_status;
 
-/**
-  * @brief  Initialize GPIO outputs and DWT cycle counter for stepper motor stage.
-  * @param  None
-  * @retval None
-  */
+/* Initialize GPIO outputs and DWT cycle counter for stepper motor stage
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Enables GPIOA and configures STEP, DIR, EN outputs
+*/
 void Motor_Init(void)
 {
   /* 1. Ensure GPIO Port A clock is active */
@@ -62,7 +65,7 @@ void Motor_Init(void)
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
   DWT->CTRL        |= DWT_CTRL_CYCCNTENA_Msk;
 
-  /* 5. Initialize TMC2209 via Single-Wire UART (PA9) */
+  /* 5. Initialize TMC2209 via Single-Wire UART (PA2) */
   s_tmc_online = TMC2209_Init();
   memset(&s_tmc_status, 0, sizeof(s_tmc_status));
 
@@ -81,11 +84,14 @@ void Motor_Init(void)
   s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 } /* Motor_Init() */
 
-/**
-  * @brief  Command target rehabilitation resistance load in pounds.
-  * @param  resistance_lbs: Commanded load in pounds (0.0 to 25.0 lbf).
-  * @retval None
-  */
+/* Command target rehabilitation resistance load in pounds
+** Parameters:
+**   resistance_lbs - Commanded load in pounds (0.0 to 25.0 lbf)
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Motor_SetResistanceLbs(float resistance_lbs)
 {
   if ( resistance_lbs < 0.0f )
@@ -115,47 +121,66 @@ void Motor_SetResistanceLbs(float resistance_lbs)
   }
 } /* Motor_SetResistanceLbs() */
 
-/**
-  * @brief  Read the currently commanded resistance target in pounds.
-  * @retval float: Commanded target resistance in pounds.
-  */
+/* Read the currently commanded resistance target in pounds
+** Parameters:
+**   None
+** Return:
+**   float: Commanded target resistance in pounds
+** Notes:
+**   None
+*/
 float Motor_GetTargetResistanceLbs(void)
 {
   return s_target_resistance_lbs;
 } /* Motor_GetTargetResistanceLbs() */
 
-/**
-  * @brief  Read total commanded carriage position (feedforward + PI trim) in mm.
-  * @retval float: Commanded linear position in mm.
-  */
+/* Read total commanded carriage position (feedforward + PI trim) in mm
+** Parameters:
+**   None
+** Return:
+**   float: Commanded linear position in mm
+** Notes:
+**   None
+*/
 float Motor_GetCommandedPositionMm(void)
 {
   return s_commanded_pos_mm;
 } /* Motor_GetCommandedPositionMm() */
 
-/**
-  * @brief  Read current physical carriage position in mm.
-  * @retval float: Current carriage position in mm.
-  */
+/* Read current physical carriage position in mm
+** Parameters:
+**   None
+** Return:
+**   float: Current carriage position in mm
+** Notes:
+**   None
+*/
 float Motor_GetCurrentPositionMm(void)
 {
   return s_current_pos_mm;
 } /* Motor_GetCurrentPositionMm() */
 
-/**
-  * @brief  Read instantaneous actuator effort / carriage position for telemetry.
-  * @retval float: Current carriage position in mm.
-  */
+/* Read instantaneous actuator effort / carriage position for telemetry
+** Parameters:
+**   None
+** Return:
+**   float: Current carriage position in mm
+** Notes:
+**   Mapped to telemetry packet motor_iq_a slot
+*/
 float Motor_GetIqCurrent(void)
 {
   return s_current_pos_mm;
 } /* Motor_GetIqCurrent() */
 
-/**
-  * @brief  Instant safety disable of torque actuator output.
-  * @param  None
-  * @retval None
-  */
+/* Instant safety disable of torque actuator output
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Disables driver and resets step targets
+*/
 void Motor_EmergencyStop(void)
 {
   s_target_resistance_lbs = 0.0f;
@@ -169,30 +194,40 @@ void Motor_EmergencyStop(void)
   HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
 } /* Motor_EmergencyStop() */
 
-/**
-  * @brief  Query if torque actuator is actively engaged.
-  * @retval bool: True if enabled.
-  */
+/* Query if torque actuator is actively engaged
+** Parameters:
+**   None
+** Return:
+**   bool: True if enabled
+** Notes:
+**   None
+*/
 bool Motor_IsEnabled(void)
 {
   return s_motor_enabled;
 } /* Motor_IsEnabled() */
 
-/**
-  * @brief  Configure motor direction polarity (in case wiring is reversed).
-  * @param  inverted: True to invert DIR pin logic.
-  * @retval None
-  */
+/* Configure motor direction polarity
+** Parameters:
+**   inverted - True to invert DIR pin logic
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Motor_SetInvertedDirection(bool inverted)
 {
   s_dir_inverted = inverted;
 } /* Motor_SetInvertedDirection() */
 
-/**
-  * @brief  Configure microstepping divider (e.g. 1, 4, 8, 16).
-  * @param  ustep_div: Microstepping divisor.
-  * @retval None
-  */
+/* Configure microstepping divider (e.g. 1, 4, 8, 16)
+** Parameters:
+**   ustep_div - Microstepping divisor
+** Return:
+**   None
+** Notes:
+**   Recalculates steps per mm scaling
+*/
 void Motor_SetMicrostepping(float ustep_div)
 {
   if ( ustep_div < 1.0f )
@@ -202,16 +237,16 @@ void Motor_SetMicrostepping(float ustep_div)
   s_steps_per_mm = (MOTOR_FULL_STEPS_PER_REV * ustep_div) / MOTOR_LEAD_SCREW_PITCH_MM;
 } /* Motor_SetMicrostepping() */
 
-/**
-  * @brief  Periodic dynamic brake control update.
-  *         Calculates feedforward carriage displacement from target resistance,
-  *         computes Laplace-tuned PI feedback trim with deadband filtering
-  *         and motion gating, and velocity-slew-rates the target trajectory.
-  * @param  measured_force_lbs: Current force reading from handle load cell.
-  * @param  velocity_deg_s: Instantaneous angular velocity from rotary encoder.
-  * @param  dt_s: Time step in seconds (nominally 0.010 s for 100 Hz loop).
-  * @retval None
-  */
+/* Periodic dynamic brake control update
+** Parameters:
+**   measured_force_lbs - Current force reading from handle load cell
+**   velocity_deg_s - Instantaneous angular velocity from rotary encoder
+**   dt_s - Time step in seconds (nominally 0.010 s for 100 Hz loop)
+** Return:
+**   None
+** Notes:
+**   Executes at 100 Hz rate
+*/
 void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float dt_s)
 {
   /* Sanity-check time step */
@@ -230,11 +265,9 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   else
   {
     /* 1. Feedforward Position Calculation */
-    /* x_ff = x_slack + (F_target / K_plant) */
     s_feedforward_pos_mm = X_SLACK_MM + (s_target_resistance_lbs / K_PLANT_NOMINAL);
 
     /* 2. Closed-Loop Force Error */
-    /* e = F_target - F_measured */
     float error = s_target_resistance_lbs - measured_force_lbs;
 
     /* 3. Deadband Filtering (Rejects chatter and human tremor) */
@@ -252,13 +285,12 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     }
 
     /* 4. Motion Gating */
-    /* Only accumulate integrator when arm is moving or patient is actively pulling */
-    bool is_moving = ( fabsf(velocity_deg_s) > VELOCITY_GATE_DEG_S );
-    bool is_loaded = ( measured_force_lbs > FORCE_GATE_LBS );
+    bool is_moving = (fabsf(velocity_deg_s) > VELOCITY_GATE_DEG_S);
+    bool is_loaded = (measured_force_lbs > FORCE_GATE_LBS);
 
     if ( is_moving || is_loaded )
     {
-      s_integral += ( error_eff * dt_s );
+      s_integral += (error_eff * dt_s);
 
       /* Anti-windup clamping on integral trim */
       float max_integral = INTEGRAL_MAX_TRIM_MM / KI_FORCE;
@@ -273,8 +305,7 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     }
 
     /* 5. Laplace-Derived PI Feedback Trim */
-    /* x_trim = (Kp * error_eff) + (Ki * integral) */
-    float trim_mm = ( KP_FORCE * error_eff ) + ( KI_FORCE * s_integral );
+    float trim_mm = (KP_FORCE * error_eff) + (KI_FORCE * s_integral);
 
     /* 6. Total Commanded Carriage Position */
     s_commanded_pos_mm = s_feedforward_pos_mm + trim_mm;
@@ -306,11 +337,12 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   }
 
   /* 8. Convert Profiled Linear Position to Target Motor Steps */
-  s_target_step = (int32_t)( s_profiled_pos_mm * s_steps_per_mm );
+  s_target_step = (int32_t)(s_profiled_pos_mm * s_steps_per_mm);
 
   /* 9. Periodic TMC2209 Health Diagnostics (polled every 100 ms) */
   static uint8_t s_tmc_check_cnt = 0;
-  if ( s_tmc_online && (++s_tmc_check_cnt >= 10) )
+  s_tmc_check_cnt++;
+  if ( s_tmc_online && (s_tmc_check_cnt >= 10) )
   {
     s_tmc_check_cnt = 0;
     if ( TMC2209_ReadStatus(&s_tmc_status) )
@@ -323,13 +355,14 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   }
 } /* Motor_UpdateControl() */
 
-/**
-  * @brief  Non-blocking stepper pulse engine.
-  *         Call frequently on each iteration of the main executive while(1) loop.
-  *         Maintains precise minimum step period using Cortex-M4 DWT cycles.
-  * @param  None
-  * @retval None
-  */
+/* Non-blocking stepper pulse engine
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Maintains microsecond minimum step period using Cortex-M4 DWT cycles
+*/
 void Motor_StepTask(void)
 {
   if ( s_current_step == s_target_step )
@@ -381,23 +414,27 @@ void Motor_StepTask(void)
   s_last_step_cycle  = cycles_now;
 } /* Motor_StepTask() */
 
-/* ==========================================================================
-   TMC2209 Advanced Feature Functions
-   ========================================================================== */
-
-/**
-  * @brief  Query if TMC2209 responded over single-wire UART.
-  * @retval bool: True if online.
-  */
+/* Query if TMC2209 responded over single-wire UART
+** Parameters:
+**   None
+** Return:
+**   bool: True if online
+** Notes:
+**   None
+*/
 bool Motor_IsTMC2209Online(void)
 {
   return s_tmc_online;
-}
+} /* Motor_IsTMC2209Online() */
 
-/**
-  * @brief  Read instantaneous StallGuard4 mechanical coil load (0..1023).
-  * @retval uint16_t: StallGuard value.
-  */
+/* Read instantaneous StallGuard4 mechanical coil load (0..1023)
+** Parameters:
+**   None
+** Return:
+**   uint16_t: StallGuard value
+** Notes:
+**   None
+*/
 uint16_t Motor_GetStallGuardResult(void)
 {
   if ( s_tmc_online )
@@ -405,28 +442,34 @@ uint16_t Motor_GetStallGuardResult(void)
     return TMC2209_ReadStallGuard();
   }
   return 0;
-}
+} /* Motor_GetStallGuardResult() */
 
-/**
-  * @brief  Query driver health, temperature flags, and coil short diagnostics.
-  * @param  status: Pointer to TMC2209_Status_t struct.
-  * @retval bool: True if query succeeded.
-  */
+/* Query driver health, temperature flags, and coil short diagnostics
+** Parameters:
+**   status - Pointer to TMC2209_Status_t struct
+** Return:
+**   bool: True if query succeeded
+** Notes:
+**   None
+*/
 bool Motor_GetTMC2209Status(TMC2209_Status_t *status)
 {
-  if ( !s_tmc_online || (status == NULL) )
+  if ( (!s_tmc_online) || (status == (TMC2209_Status_t *)0) )
   {
     return false;
   }
   return TMC2209_ReadStatus(status);
-}
+} /* Motor_GetTMC2209Status() */
 
-/**
-  * @brief  Configure digital coil current in mA and standstill hold percentage over UART.
-  * @param  run_mA: Commanded RMS run current in milliamps (e.g. 800..1400 mA).
-  * @param  hold_percent: Hold current percentage at standstill (e.g. 50%).
-  * @retval bool: True if written.
-  */
+/* Configure digital coil current in mA and standstill hold percentage over UART
+** Parameters:
+**   run_mA - Commanded RMS run current in milliamps (e.g. 800..1400 mA)
+**   hold_percent - Hold current percentage at standstill (e.g. 50%)
+** Return:
+**   bool: True if written
+** Notes:
+**   None
+*/
 bool Motor_SetDriverCurrent(uint16_t run_mA, uint8_t hold_percent)
 {
   if ( !s_tmc_online )
@@ -434,13 +477,16 @@ bool Motor_SetDriverCurrent(uint16_t run_mA, uint8_t hold_percent)
     return false;
   }
   return TMC2209_SetCurrent(run_mA, hold_percent);
-}
+} /* Motor_SetDriverCurrent() */
 
-/**
-  * @brief  Toggle StealthChop2 (whisper quiet) vs SpreadCycle (high dynamic torque).
-  * @param  enable: True for StealthChop2, False for SpreadCycle.
-  * @retval bool: True if updated.
-  */
+/* Toggle StealthChop2 vs SpreadCycle
+** Parameters:
+**   enable - True for StealthChop2, False for SpreadCycle
+** Return:
+**   bool: True if updated
+** Notes:
+**   None
+*/
 bool Motor_SetDriverStealthChop(bool enable)
 {
   if ( !s_tmc_online )
@@ -448,14 +494,17 @@ bool Motor_SetDriverStealthChop(bool enable)
     return false;
   }
   return TMC2209_EnableStealthChop(enable);
-}
+} /* Motor_SetDriverStealthChop() */
 
-/**
-  * @brief  Configure CoolStep load-dependent current reduction.
-  * @param  semin: Lower StallGuard threshold (e.g. 2). Set 0 to disable.
-  * @param  semax: Upper StallGuard threshold (e.g. 5).
-  * @retval bool: True if updated.
-  */
+/* Configure CoolStep load-dependent current reduction
+** Parameters:
+**   semin - Lower StallGuard threshold
+**   semax - Upper StallGuard threshold
+** Return:
+**   bool: True if updated
+** Notes:
+**   None
+*/
 bool Motor_SetDriverCoolStep(uint8_t semin, uint8_t semax)
 {
   if ( !s_tmc_online )
@@ -463,13 +512,16 @@ bool Motor_SetDriverCoolStep(uint8_t semin, uint8_t semax)
     return false;
   }
   return TMC2209_ConfigureCoolStep(semin, semax);
-}
+} /* Motor_SetDriverCoolStep() */
 
-/**
-  * @brief  Configure StallGuard4 stall sensitivity threshold (0..255).
-  * @param  threshold: Sensitivity value.
-  * @retval bool: True if updated.
-  */
+/* Configure StallGuard4 stall sensitivity threshold (0..255)
+** Parameters:
+**   threshold - Sensitivity value
+** Return:
+**   bool: True if updated
+** Notes:
+**   None
+*/
 bool Motor_SetDriverStallGuardThreshold(uint8_t threshold)
 {
   if ( !s_tmc_online )
@@ -477,13 +529,16 @@ bool Motor_SetDriverStallGuardThreshold(uint8_t threshold)
     return false;
   }
   return TMC2209_ConfigureStallGuard(threshold);
-}
+} /* Motor_SetDriverStallGuardThreshold() */
 
-/**
-  * @brief  Execute sensorless homing using StallGuard4.
-  *         Retracts the carriage slowly until the mechanical reverse stop is reached.
-  * @retval bool: True if homed successfully against hard stop.
-  */
+/* Execute sensorless homing using StallGuard4
+** Parameters:
+**   None
+** Return:
+**   bool: True if homed successfully against hard stop
+** Notes:
+**   Retracts carriage slowly until mechanical reverse stop is reached
+*/
 bool Motor_SensorlessHome(void)
 {
   if ( !s_tmc_online )
@@ -537,4 +592,4 @@ bool Motor_SensorlessHome(void)
   /* Restore normal operating sensitivity */
   TMC2209_ConfigureStallGuard(64);
   return stalled;
-}
+} /* Motor_SensorlessHome() */

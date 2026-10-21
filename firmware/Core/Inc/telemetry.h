@@ -1,13 +1,11 @@
-/**
-  ******************************************************************************
-  * Texas A&M University
-  * Electronic Systems Engineering Technology
-  * ESET-469 Embedded Real Time Software Development
-  * Author: Squish Therapy
-  * File: telemetry.h
-  * Brief: Public interface for 28-byte binary telemetry and serial command parser.
-  ******************************************************************************
-  */
+/* Texas A&M University
+** Electronic Systems Engineering Technology
+** ESET-469 Embedded Real Time Software Development
+** Author: Squish Therapy
+** File: telemetry.h
+** --------
+** Public interface for 28-byte binary telemetry and serial command parser.
+*/
 
 #ifndef TELEMETRY_H
 #define TELEMETRY_H
@@ -26,10 +24,9 @@ extern "C" {
 #define TELEMETRY_PREAMBLE_1    0x55
 
 #pragma pack(push, 1)
-/**
-  * @brief  Packed 28-byte binary telemetry packet structure.
-  */
-typedef struct {
+/* Packed 28-byte binary telemetry packet structure */
+typedef struct
+{
   uint8_t  preamble[2];     /* Bytes 0..1:   0xAA, 0x55 synchronization bytes */
   uint32_t timestamp_ms;    /* Bytes 2..5:   System uptime in milliseconds */
   float    angle_deg;       /* Bytes 6..9:   Joint angle in degrees */
@@ -43,10 +40,9 @@ typedef struct {
 
 _Static_assert(sizeof(TelemetryPacket_t) == 28, "TelemetryPacket_t must be exactly 28 bytes!");
 
-/**
-  * @brief  Host / GUI commands recognized by firmware state machine.
-  */
-typedef enum {
+/* Host / GUI commands recognized by firmware state machine */
+typedef enum
+{
   CMD_NONE = 0,
   CMD_START,
   CMD_STOP,

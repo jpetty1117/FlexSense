@@ -1,13 +1,11 @@
-/**
-  ******************************************************************************
-  * Texas A&M University
-  * Electronic Systems Engineering Technology
-  * ESET-469 Embedded Real Time Software Development
-  * Author: Squish Therapy
-  * File: encoder.h
-  * Brief: Public interface for rotary encoder kinematics and velocity filtering.
-  ******************************************************************************
-  */
+/* Texas A&M University
+** Electronic Systems Engineering Technology
+** ESET-469 Embedded Real Time Software Development
+** Author: Squish Therapy
+** File: encoder.h
+** --------
+** Public interface for rotary encoder kinematics and velocity filtering.
+*/
 
 #ifndef ENCODER_H
 #define ENCODER_H

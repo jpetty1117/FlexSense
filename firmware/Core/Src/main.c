@@ -1,24 +1,11 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * Texas A&M University
-  * Electronic Systems Engineering Technology
-  * ESET-469 Embedded Real Time Software Development
-  * Author: Squish Therapy
-  * File: main.c
-  * Brief: Executive state machine and real-time scheduler for FlexSense.
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
+/* Texas A&M University
+** Electronic Systems Engineering Technology
+** ESET-469 Embedded Real Time Software Development
+** Author: Squish Therapy
+** File: main.c
+** --------
+** Executive state machine and real-time scheduler for FlexSense.
+*/
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -39,7 +26,8 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum {
+typedef enum
+{
   SYS_STATE_IDLE = 0,
   SYS_STATE_STREAMING
 } SystemState_t;
@@ -100,6 +88,7 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM2_Init();
   MX_I2C1_Init();
+  MX_I2C3_Init();
   MX_USB_DEVICE_Init();
   MX_USART2_UART_Init();
 

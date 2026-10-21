@@ -1,13 +1,11 @@
-/**
-  ******************************************************************************
-  * Texas A&M University
-  * Electronic Systems Engineering Technology
-  * ESET-469 Embedded Real Time Software Development
-  * Author: Squish Therapy
-  * File: telemetry.c
-  * Brief: Implementation of binary packet framing, CRC16, and command parser.
-  ******************************************************************************
-  */
+/* Texas A&M University
+** Electronic Systems Engineering Technology
+** ESET-469 Embedded Real Time Software Development
+** Author: Squish Therapy
+** File: telemetry.c
+** --------
+** Implementation of binary packet framing, CRC16, and command parser.
+*/
 
 #include "telemetry.h"
 #include "usbd_cdc_if.h"
@@ -15,52 +13,67 @@
 #include <strings.h>
 #include <stdlib.h>
 
-#define CMD_BUF_SIZE 64
-#define RX_RING_BUF_SIZE 128
+#define CMD_BUF_SIZE        64
+#define RX_RING_BUF_SIZE    128
 
 /* Private Module Variables */
-static UART_HandleTypeDef *s_huart = NULL;
+static UART_HandleTypeDef *s_huart = (UART_HandleTypeDef *)0;
 static char                s_cmd_buf[CMD_BUF_SIZE];
 static uint8_t             s_cmd_idx = 0;
 static float               s_cmd_param = 0.0f;
 
-static uint8_t             s_rx_ring[RX_RING_BUF_SIZE];
-static volatile uint8_t    s_rx_head = 0;
-static volatile uint8_t    s_rx_tail = 0;
+static volatile uint8_t s_rx_ring[RX_RING_BUF_SIZE];
+static volatile uint8_t s_rx_head = 0;
+static volatile uint8_t s_rx_tail = 0;
 
-/**
-  * @brief  Read the parameter associated with the latest parsed command.
-  * @retval float: Parsed parameter value (e.g. resistance in lbs).
-  */
+/* Private Function Prototypes */
+static SystemCommand_t ProcessIncomingChar(char c);
+
+/* Read the parameter associated with the latest parsed command
+** Parameters:
+**   None
+** Return:
+**   float: Parsed parameter value (e.g. resistance in lbs)
+** Notes:
+**   None
+*/
 float Telemetry_GetCommandParam(void)
 {
   return s_cmd_param;
-}
+} /* Telemetry_GetCommandParam() */
 
-/**
-  * @brief  Feeds raw data received from USB CDC into the telemetry ring buffer.
-  * @param  data: Pointer to incoming byte buffer.
-  * @param  len: Length in bytes.
-  * @retval None
-  */
+/* Feeds raw data received from USB CDC into the telemetry ring buffer
+** Parameters:
+**   data - Pointer to incoming byte buffer
+**   len - Length in bytes
+** Return:
+**   None
+** Notes:
+**   Called from USB CDC receive callback
+*/
 void Telemetry_FeedUsbData(const uint8_t *data, uint32_t len)
 {
   for ( uint32_t i = 0; i < len; i++ )
   {
-    uint8_t next = (uint8_t)( (s_rx_head + 1) % RX_RING_BUF_SIZE );
+    uint8_t next;
+    next = (uint8_t)((s_rx_head + 1) % RX_RING_BUF_SIZE);
     if ( next != s_rx_tail )
     {
       s_rx_ring[s_rx_head] = data[i];
+      __DMB(); /* Ensure data byte is committed before head index advances */
       s_rx_head = next;
     }
   }
-}
+} /* Telemetry_FeedUsbData() */
 
-/**
-  * @brief  Initialize telemetry module with target UART peripheral handle.
-  * @param  huart: Pointer to UART_HandleTypeDef (e.g. &huart2).
-  * @retval None
-  */
+/* Initialize telemetry module with target UART peripheral handle
+** Parameters:
+**   huart - Pointer to UART_HandleTypeDef (e.g. &huart2)
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Telemetry_Init(UART_HandleTypeDef *huart)
 {
   s_huart = huart;
@@ -70,11 +83,14 @@ void Telemetry_Init(UART_HandleTypeDef *huart)
   memset(s_cmd_buf, 0, sizeof(s_cmd_buf));
 } /* Telemetry_Init() */
 
-/**
-  * @brief  Helper to parse a single incoming character into system commands.
-  * @param  c: Incoming character.
-  * @retval SystemCommand_t: Parsed command code or CMD_NONE.
-  */
+/* Helper to parse a single incoming character into system commands
+** Parameters:
+**   c - Incoming character
+** Return:
+**   SystemCommand_t: Parsed command code or CMD_NONE
+** Notes:
+**   Handles ASCII delimiter matching and parameter extraction
+*/
 static SystemCommand_t ProcessIncomingChar(char c)
 {
   if ( (c == '\r') || (c == '\n') )
@@ -114,7 +130,7 @@ static SystemCommand_t ProcessIncomingChar(char c)
         }
         if ( *p != '\0' )
         {
-          s_cmd_param = (float)strtod(p, NULL);
+          s_cmd_param = (float)strtod(p, (char **)0);
           return CMD_SET_RESISTANCE;
         }
       }
@@ -122,7 +138,7 @@ static SystemCommand_t ProcessIncomingChar(char c)
   }
   else
   {
-    /* Only accept printable ASCII characters (0x20 space through 0x7E ~) to ignore noise/glitches */
+    /* Only accept printable ASCII characters (0x20 space through 0x7E ~) */
     if ( (c >= ' ') && (c <= '~') )
     {
       if ( s_cmd_idx < (CMD_BUF_SIZE - 1) )
@@ -141,17 +157,20 @@ static SystemCommand_t ProcessIncomingChar(char c)
   }
 
   return CMD_NONE;
-}
+} /* ProcessIncomingChar() */
 
-/**
-  * @brief  Non-blocking poll for incoming ASCII host commands over UART and USB CDC.
-  * @param  None
-  * @retval SystemCommand_t: Parsed command code or CMD_NONE.
-  */
+/* Non-blocking poll for incoming ASCII host commands over UART and USB CDC
+** Parameters:
+**   None
+** Return:
+**   SystemCommand_t: Parsed command code or CMD_NONE
+** Notes:
+**   None
+*/
 SystemCommand_t Telemetry_PollCommand(void)
 {
   /* 1. Poll UART RX if configured */
-  if ( s_huart != NULL )
+  if ( s_huart != (UART_HandleTypeDef *)0 )
   {
     if ( __HAL_UART_GET_FLAG(s_huart, UART_FLAG_ORE) ||
          __HAL_UART_GET_FLAG(s_huart, UART_FLAG_FE)  ||
@@ -175,7 +194,8 @@ SystemCommand_t Telemetry_PollCommand(void)
   while ( s_rx_tail != s_rx_head )
   {
     char c = (char)s_rx_ring[s_rx_tail];
-    s_rx_tail = (uint8_t)( (s_rx_tail + 1) % RX_RING_BUF_SIZE );
+    __DMB(); /* Ensure byte is read before tail advances */
+    s_rx_tail = (uint8_t)((s_rx_tail + 1) % RX_RING_BUF_SIZE);
     SystemCommand_t cmd = ProcessIncomingChar(c);
     if ( cmd != CMD_NONE )
     {
@@ -186,14 +206,17 @@ SystemCommand_t Telemetry_PollCommand(void)
   return CMD_NONE;
 } /* Telemetry_PollCommand() */
 
-/**
-  * @brief  Transmits a 28-byte binary telemetry packet with CRC16 over UART & USB CDC.
-  * @param  pkt: Pointer to TelemetryPacket_t structure to send.
-  * @retval None
-  */
+/* Transmits a 28-byte binary telemetry packet with CRC16 over UART & USB CDC
+** Parameters:
+**   pkt - Pointer to TelemetryPacket_t structure to send
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Telemetry_SendPacket(TelemetryPacket_t *pkt)
 {
-  if ( pkt == NULL )
+  if ( pkt == (TelemetryPacket_t *)0 )
   {
     return;
   }
@@ -203,7 +226,7 @@ void Telemetry_SendPacket(TelemetryPacket_t *pkt)
   pkt->crc16 = Telemetry_ComputeCRC16((const uint8_t *)pkt, sizeof(TelemetryPacket_t) - sizeof(uint16_t));
 
   /* Transmit over hardware UART if initialized */
-  if ( s_huart != NULL )
+  if ( s_huart != (UART_HandleTypeDef *)0 )
   {
     HAL_UART_Transmit(s_huart, (uint8_t *)pkt, sizeof(TelemetryPacket_t), 10);
   }
@@ -214,20 +237,23 @@ void Telemetry_SendPacket(TelemetryPacket_t *pkt)
   CDC_Transmit_FS(s_usb_pkt_buf, sizeof(TelemetryPacket_t));
 } /* Telemetry_SendPacket() */
 
-/**
-  * @brief  Transmits an ASCII text line over UART & USB CDC.
-  * @param  msg: Null-terminated string.
-  * @retval None
-  */
+/* Transmits an ASCII text line over UART & USB CDC
+** Parameters:
+**   msg - Null-terminated string
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Telemetry_SendAck(const char *msg)
 {
-  if ( msg == NULL )
+  if ( msg == (const char *)0 )
   {
     return;
   }
 
   /* Transmit over hardware UART if initialized */
-  if ( s_huart != NULL )
+  if ( s_huart != (UART_HandleTypeDef *)0 )
   {
     HAL_UART_Transmit(s_huart, (const uint8_t *)msg, (uint16_t)strlen(msg), 100);
   }
@@ -243,25 +269,28 @@ void Telemetry_SendAck(const char *msg)
   CDC_Transmit_FS(s_ack_buf, len);
 } /* Telemetry_SendAck() */
 
-/**
-  * @brief  Compute standard CRC-16-CCITT (poly 0x1021, init 0xFFFF).
-  * @param  data: Pointer to data buffer.
-  * @param  length: Number of bytes to checksum.
-  * @retval uint16_t: Computed 16-bit CRC checksum.
-  */
+/* Compute standard CRC-16-CCITT (poly 0x1021, init 0xFFFF)
+** Parameters:
+**   data - Pointer to data buffer
+**   length - Number of bytes to checksum
+** Return:
+**   uint16_t: Computed 16-bit CRC checksum
+** Notes:
+**   None
+*/
 uint16_t Telemetry_ComputeCRC16(const uint8_t *data, size_t length)
 {
   uint16_t crc = 0xFFFF;
 
   for ( size_t i = 0; i < length; i++ )
   {
-    crc ^= ( (uint16_t)data[i] << 8 );
+    crc ^= ((uint16_t)data[i] << 8);
 
     for ( uint8_t bit = 0; bit < 8; bit++ )
     {
-      if ( crc & 0x8000 )
+      if ( (crc & 0x8000) != 0 )
       {
-        crc = ( (crc << 1) ^ 0x1021 );
+        crc = ((crc << 1) ^ 0x1021);
       }
       else
       {
