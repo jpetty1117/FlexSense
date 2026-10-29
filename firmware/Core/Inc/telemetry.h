@@ -49,7 +49,15 @@ typedef enum
   CMD_ZERO,
   CMD_STATUS,
   CMD_SET_RESISTANCE,
-  CMD_TMC
+  CMD_TMC,
+  CMD_SPO2,
+  CMD_SET_CURRENT,
+  CMD_HOME,
+  CMD_TARE,
+  CMD_SET_HOMETHR,
+  CMD_SET_HOMESPEED,
+  CMD_SET_HOMECURR,
+  CMD_DFU
 } SystemCommand_t;
 
 /* Public Function Prototypes */

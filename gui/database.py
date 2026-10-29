@@ -31,6 +31,8 @@ class Database:
                 name TEXT NOT NULL,
                 dob TEXT,
                 notes TEXT,
+                forearm_pin INTEGER DEFAULT 4,
+                forearm_length_in REAL DEFAULT 12.0,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -40,6 +42,8 @@ class Database:
                 date TEXT NOT NULL,
                 target_resistance REAL,
                 target_angle REAL,
+                forearm_pin INTEGER DEFAULT 4,
+                forearm_length_in REAL DEFAULT 12.0,
                 notes TEXT,
                 status TEXT DEFAULT 'completed',
                 FOREIGN KEY (client_id) REFERENCES clients(id)
@@ -56,6 +60,18 @@ class Database:
                 FOREIGN KEY (session_id) REFERENCES test_sessions(id)
             );
         """)
+
+        # Migration guards for existing databases
+        for col, col_type in [("forearm_pin", "INTEGER DEFAULT 4"), ("forearm_length_in", "REAL DEFAULT 12.0")]:
+            try:
+                cursor.execute(f"ALTER TABLE clients ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass
+            try:
+                cursor.execute(f"ALTER TABLE test_sessions ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass
+
         self.conn.commit()
 
     # ── Client CRUD ──────────────────────────────────────────────
@@ -73,12 +89,13 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def create_client(self, name, dob, notes=""):
+    def create_client(self, name, dob, notes="", forearm_pin=4, forearm_length_in=12.0):
         """Insert a new client and return their ID."""
         cursor = self.conn.cursor()
         cursor.execute(
-            "INSERT INTO clients (name, dob, notes) VALUES (?, ?, ?)",
-            (name, dob, notes),
+            """INSERT INTO clients (name, dob, notes, forearm_pin, forearm_length_in)
+               VALUES (?, ?, ?, ?, ?)""",
+            (name, dob, notes, forearm_pin, forearm_length_in),
         )
         self.conn.commit()
         return cursor.lastrowid
@@ -94,15 +111,15 @@ class Database:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-    def create_session(self, client_id, target_resistance, target_angle, notes="", date=None):
+    def create_session(self, client_id, target_resistance, target_angle, notes="", date=None, forearm_pin=4, forearm_length_in=12.0):
         """Create a new test session and return its ID."""
         if date is None:
             date = datetime.now().isoformat()
         cursor = self.conn.cursor()
         cursor.execute(
-            """INSERT INTO test_sessions (client_id, date, target_resistance, target_angle, notes, status)
-               VALUES (?, ?, ?, ?, ?, 'in_progress')""",
-            (client_id, date, target_resistance, target_angle, notes),
+            """INSERT INTO test_sessions (client_id, date, target_resistance, target_angle, forearm_pin, forearm_length_in, notes, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'in_progress')""",
+            (client_id, date, target_resistance, target_angle, forearm_pin, forearm_length_in, notes),
         )
         self.conn.commit()
         return cursor.lastrowid

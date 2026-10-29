@@ -112,6 +112,7 @@ bool     TMC2209_ReadStatus(TMC2209_Status_t *status);
 uint32_t TMC2209_ReadIO(void);
 bool     TMC2209_WriteRegister(uint8_t reg, uint32_t data);
 bool     TMC2209_ReadRegister(uint8_t reg, uint32_t *data);
+void     TMC2209_GetDiagnostic(char *buf, size_t max_len);
 
 #ifdef __cplusplus
 }

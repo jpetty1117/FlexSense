@@ -15,8 +15,8 @@ Real-time 60 FPS Clinical Rehabilitation Dashboard featuring:
 import time
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDoubleSpinBox, QFrame, QFormLayout, QSplitter,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QDoubleSpinBox, QComboBox, QFrame, QFormLayout, QSplitter,
     QGraphicsDropShadowEffect, QSizePolicy,
 )
 from PySide6.QtCore import Signal, Qt, QTimer
@@ -202,8 +202,14 @@ class LiveTestScreen(QWidget):
         self.generator = None
         self.hw = STM32EncoderInterface()
         self._hw_start_ms = None
+        self._start_time = time.time()
         self.is_running = False
         self.elapsed_time = 0.0
+        self.preview_time = 0.0
+        self.current_rom = 0.0
+        self.current_speed = 0.0
+        self.current_force = 0.0
+        self.current_spo2 = 0.0
         self.dt = 0.016  # ~60 Hz update rate
         self.time_window = 10.0  # seconds visible on screen
 
@@ -228,7 +234,6 @@ class LiveTestScreen(QWidget):
         self.therapy_work_j = 0.0
         self.last_deficit_angle = None
         self.last_deficit_force = None
-        self.current_spo2 = 98.0
         self._angle_zero_offset = 0.0
 
         # Repetition state machine
@@ -236,10 +241,6 @@ class LiveTestScreen(QWidget):
         self.rep_rom_buf = []
         self.rep_force_buf = []
         self.session_baseline_rom = 0.0
-
-        # Hero Plot layout & mode state
-        self._maximized_idx = None
-        self.force_plot_mode = "TIME"  # "TIME" (Force vs Time) or "ANGLE" (Force vs Angle)
 
         self._build_ui()
         self._setup_timer()
@@ -292,17 +293,70 @@ class LiveTestScreen(QWidget):
         load_box.addWidget(lbl_load)
 
         self.spin_resistance = QDoubleSpinBox()
-        self.spin_resistance.setRange(1.0, 15.0)
+        self.spin_resistance.setRange(0.0, 25.0)
         self.spin_resistance.setValue(10.0)
+        self.spin_resistance.setSingleStep(0.5)
+        self.spin_resistance.setDecimals(1)
         self.spin_resistance.setSuffix(" lbs")
         self.spin_resistance.setMinimumHeight(34)
-        self.spin_resistance.valueChanged.connect(self._on_resistance_changed)
+        self.spin_resistance.setKeyboardTracking(False)
+        self.spin_resistance.valueChanged.connect(self._on_resistance_value_changed)
+        if self.spin_resistance.lineEdit():
+            self.spin_resistance.lineEdit().returnPressed.connect(self._submit_resistance)
         load_box.addWidget(self.spin_resistance)
+
+        self.btn_submit_resistance = QPushButton("✓ Submit")
+        self.btn_submit_resistance.setToolTip("Transmit target load to NEMA stepper motor")
+        self.btn_submit_resistance.setCursor(Qt.PointingHandCursor)
+        self.btn_submit_resistance.setMinimumHeight(34)
+        self.btn_submit_resistance.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['bg_surface']};
+                color: {COLORS['accent']};
+                border: 1px solid {COLORS['accent']};
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-weight: bold;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+                color: white;
+            }}
+            QPushButton:pressed {{
+                background-color: {COLORS['accent_dark']};
+            }}
+        """)
+        self.btn_submit_resistance.clicked.connect(self._submit_resistance)
+        load_box.addWidget(self.btn_submit_resistance)
         controls_layout.addLayout(load_box)
 
+        # Forearm Length Parameter (Pin 1: 9" to Pin 5: 13")
+        forearm_box = QHBoxLayout()
+        forearm_box.setSpacing(8)
+        lbl_forearm = QLabel("Forearm Length:")
+        lbl_forearm.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px; font-weight: bold;")
+        forearm_box.addWidget(lbl_forearm)
+
+        self.combo_forearm = QComboBox()
+        self.combo_forearm.setMinimumHeight(34)
+        self.combo_forearm.setMinimumWidth(165)
+        self.combo_forearm.setCursor(Qt.PointingHandCursor)
+        for pin_num in range(1, 6):
+            length_in = float(pin_num + 8)  # Pin 1=9", Pin 2=10", Pin 3=11", Pin 4=12", Pin 5=13"
+            cm = length_in * 2.54
+            self.combo_forearm.addItem(
+                f"Pin {pin_num} — {length_in:.0f}\" ({cm:.1f} cm)",
+                userData={"pin": pin_num, "inches": length_in, "meters": length_in * 0.0254}
+            )
+        self.combo_forearm.setCurrentIndex(3)  # Default Pin 4 (12 in)
+        self.combo_forearm.currentIndexChanged.connect(self._on_forearm_changed)
+        forearm_box.addWidget(self.combo_forearm)
+        controls_layout.addLayout(forearm_box)
+
         # Zero / Tare Encoder & Load Cell Button
-        self.btn_zero = QPushButton("⟲ Zero && Tare")
-        self.btn_zero.setToolTip("Zero rotary encoder position and tare load cell baseline")
+        self.btn_zero = QPushButton("⟲ Home && Tare")
+        self.btn_zero.setToolTip("Home NEMA stepper carriage (forward to end, back off 5 mm) and tare sensors")
         self.btn_zero.setCursor(Qt.PointingHandCursor)
         self.btn_zero.setMinimumHeight(38)
         self.btn_zero.setMinimumWidth(130)
@@ -766,7 +820,7 @@ class LiveTestScreen(QWidget):
                 self.panel_force.set_maximized(True)
             self._maximized_idx = idx
 
-    def _on_resistance_changed(self, val):
+    def _on_resistance_value_changed(self, val):
         self.line_target_force.setPos(val)
         if self.force_plot_mode == "TIME":
             current_t = self.time_data[-1] if self.time_data else self.time_window
@@ -777,23 +831,80 @@ class LiveTestScreen(QWidget):
         self.plot_force.setYRange(0, max(25.0, val * 1.6), padding=0)
         if self.last_deficit_angle is None:
             self.lbl_hud_force_sub.setText(f"Peak: {getattr(self, 'max_session_force', 0.0):.1f} lbs • Target: {val:.1f} lbs")
-        if getattr(self, 'is_running', False) and getattr(self, 'hw', None) and self.hw.is_connected:
-            self.hw.set_resistance(val)
+
+    def _submit_resistance(self):
+        """Transmit commanded target resistance to STM32 NEMA stepper controller."""
+        val = self.spin_resistance.value()
+        if getattr(self, 'generator', None):
+            self.generator.target_resistance = val
+        if getattr(self, 'hw', None):
+            if not self.hw.is_connected:
+                self.hw.connect()
+            if self.hw.is_connected:
+                self.hw.set_resistance(val)
+                self.lbl_status.setText(f"● RESISTANCE SUBMITTED: {val:.1f} LBS (NEMA Position Commanded)")
+                self.lbl_status.setStyleSheet(
+                    f"color: {COLORS['success']}; font-size: 14px; font-weight: bold; "
+                    f"padding: 4px 10px; background-color: {COLORS['bg_surface']}; "
+                    f"border-radius: 6px; border: 1px solid {COLORS['success']};"
+                )
+                if hasattr(self, 'btn_submit_resistance'):
+                    self.btn_submit_resistance.setText("✓ Sent")
+                    QTimer.singleShot(1000, lambda: self.btn_submit_resistance.setText("✓ Submit") if hasattr(self, 'btn_submit_resistance') else None)
+
+    def _on_resistance_changed(self, val):
+        self._on_resistance_value_changed(val)
+
+    def get_forearm_pin(self) -> int:
+        data = self.combo_forearm.currentData()
+        if isinstance(data, dict) and "pin" in data:
+            return int(data["pin"])
+        return self.combo_forearm.currentIndex() + 1
+
+    def get_forearm_inches(self) -> float:
+        data = self.combo_forearm.currentData()
+        if isinstance(data, dict) and "inches" in data:
+            return float(data["inches"])
+        return float(self.combo_forearm.currentIndex() + 9)
+
+    def get_forearm_meters(self) -> float:
+        return self.get_forearm_inches() * 0.0254
+
+    def _on_forearm_changed(self, _idx=0):
+        pin = self.get_forearm_pin()
+        inches = self.get_forearm_inches()
+        self.lbl_hud_work_sub.setText(f"Cumulative Energy (Pin {pin}: {inches:.0f}\")")
+        if not self.is_running:
+            self.lbl_hud_force_sub.setText(f"Peak: {self.max_session_force:.1f} lbs • Target: {self.spin_resistance.value():.1f} lbs")
 
     def _zero_encoder(self):
-        """Sends ZERO command to tare Nucleo rotary encoder and NAU7802 load cell."""
+        """Homes NEMA stepper carriage to limit, backs off 5 mm, and tares encoder & load cell."""
         if not self.hw.is_connected:
             self.hw.connect()
         if self.hw.is_connected:
+            self.lbl_status.setText("● HOMING NEMA & TARING SENSORS...")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['warning']};")
+            QApplication.processEvents()
+            self.hw.home()
             self.hw.zero()
-        self._angle_zero_offset = self.hw.last_angle if self.hw.is_connected else 0.0
+        self.current_rom = 0.0
+        self.current_force = 0.0
         self.max_session_rom = 0.0
         self.max_session_force = 0.0
+        if not self.is_running:
+            self.time_data = []
+            self.rom_data = []
+            self.speed_data = []
+            self.force_data = []
+            self.spo2_data = []
+            self.preview_time = 0.0
+            self.curve_rom.setData([], [])
+            self.curve_force_live.setData([], [])
         self.lbl_hud_rom.setText("0.0°")
-        self.lbl_hud_rom_sub.setText("Current: 0.0°")
+        self.lbl_hud_rom_sub.setText("Live Angle: 0.0°")
         self.lbl_hud_force.setText("0.0 lbs")
-        self.lbl_hud_force_sub.setText(f"Peak: 0.0 lbs • Target: {self.spin_resistance.value():.1f} lbs")
-        self.lbl_status.setText("● ZERO & TARE COMPLETED")
+        self.lbl_hud_force_sub.setText(f"Live Sensor • Target: {self.spin_resistance.value():.1f} lbs")
+        self.lbl_status.setText("● NEMA HOMED & SENSORS TARED")
         self.lbl_status.setStyleSheet(f"color: {COLORS['info']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['info']};")
 
     def _setup_timer(self):
@@ -801,23 +912,43 @@ class LiveTestScreen(QWidget):
         self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.setInterval(int(self.dt * 1000))  # 16ms ~ 60 FPS
         self.timer.timeout.connect(self._update_data)
+        self.timer.start()
 
     def setup(self, client_id):
         self.client_id = client_id
+        if self.client_id:
+            client = self.db.get_client(self.client_id)
+            if client and "forearm_pin" in client and client["forearm_pin"]:
+                pin_idx = max(0, min(4, int(client["forearm_pin"]) - 1))
+                self.combo_forearm.setCurrentIndex(pin_idx)
         if not self.hw.is_connected:
             self.hw.connect()
         self._reset()
         if self.hw.is_connected:
-            self.lbl_status.setText("● HARDWARE CONNECTED")
+            self.hw.start_streaming(target_resistance=None)
+            self.lbl_status.setText("● LIVE PREVIEW (Hardware Ready — Click 'Submit' to Set Load or 'Start Test')")
             self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
+        else:
+            self.generator = LiveDataGenerator(target_resistance=self.spin_resistance.value())
+            self.lbl_status.setText("● LIVE PREVIEW (Simulated — Click 'Start Test' to Record)")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
+        if not self.timer.isActive():
+            self.timer.start()
+
+    def cleanup(self):
+        """Safely pause timers and close hardware streaming on view unload / app close."""
+        if hasattr(self, 'timer') and self.timer.isActive():
+            self.timer.stop()
+        if hasattr(self, 'hw') and self.hw.is_connected:
+            self.hw.stop_streaming()
+            self.hw.disconnect()
 
     def _reset(self):
-        """Reset all data buffers, metrics, and graphs."""
+        """Reset test session state while maintaining real-time sensor preview."""
         self.is_running = False
         self.elapsed_time = 0.0
         self._hw_start_ms = None
         self.session_id = None
-        self.generator = None
         self.ticks = 0
 
         self.full_time_data = []
@@ -841,7 +972,7 @@ class LiveTestScreen(QWidget):
         self.rep_state = "EXTENDED"
         self.rep_rom_buf = []
         self.rep_force_buf = []
-        self.session_baseline_rom = 0.0
+        self.session_baseline_rom = self.current_rom
 
         self.curve_rom.setData([], [])
         self.curve_force_live.setData([], [])
@@ -857,18 +988,25 @@ class LiveTestScreen(QWidget):
 
         self.lbl_hud_reps.setText("0 Reps")
         self.lbl_hud_reps_sub.setText("Target: 10 Reps")
-        self.lbl_hud_rom.setText("0.0°")
-        self.lbl_hud_rom_sub.setText("Current: 0.0°")
-        self.lbl_hud_force.setText("0.0 lbs")
+        self.lbl_hud_rom.setText(f"{self.current_rom:.1f}°")
+        self.lbl_hud_rom_sub.setText(f"Live Angle: {self.current_rom:.1f}°")
+        self.lbl_hud_force.setText(f"{self.current_force:.1f} lbs")
         self.lbl_hud_force.setStyleSheet(f"font-size: 22px; font-weight: bold; color: {COLORS['graph_strength']};")
-        self.lbl_hud_force_sub.setText(f"Peak: 0.0 lbs • Target: {self.spin_resistance.value():.1f} lbs")
+        self.lbl_hud_force_sub.setText(f"Live Sensor • Target: {self.spin_resistance.value():.1f} lbs")
         self.lbl_hud_force_sub.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {COLORS['text_muted']};")
         self.lbl_hud_work.setText("0 J")
-        self.lbl_hud_spo2.setText("98%")
+        if self.current_spo2 > 0:
+            self.lbl_hud_spo2.setText(f"{self.current_spo2:.0f}%")
+        else:
+            self.lbl_hud_spo2.setText("---%")
 
-        self.lbl_timer.setText("0.0 s")
-        self.lbl_status.setText("● IDLE")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['border']};")
+        self.lbl_timer.setText("Ready (0.0 s)")
+        if self.hw.is_connected:
+            self.lbl_status.setText("● LIVE PREVIEW (Hardware Ready — Click 'Start Test' to Record)")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
+        else:
+            self.lbl_status.setText("● LIVE PREVIEW (Simulated — Click 'Start Test' to Record)")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
 
         self.btn_start_stop.setText("▶  Start Test")
         self.btn_start_stop.setStyleSheet(f"""
@@ -889,6 +1027,8 @@ class LiveTestScreen(QWidget):
         self.btn_discard.setVisible(False)
         self.spin_resistance.setEnabled(True)
         self.btn_zero.setEnabled(True)
+        if not self.timer.isActive():
+            self.timer.start()
 
     def _toggle_test(self):
         if self.is_running:
@@ -902,12 +1042,12 @@ class LiveTestScreen(QWidget):
         self._on_resistance_changed(target_resistance)
 
         self.is_running = True
-        self.spin_resistance.setEnabled(False)
+        self.spin_resistance.setEnabled(True)
         self.btn_zero.setEnabled(False)
         self.btn_save.setVisible(False)
         self.btn_discard.setVisible(False)
 
-        # Clear buffers
+        # Clear session buffers for the new recording
         self.full_time_data = []
         self.full_rom_data = []
         self.full_speed_data = []
@@ -929,7 +1069,7 @@ class LiveTestScreen(QWidget):
         self.rep_state = "EXTENDED"
         self.rep_rom_buf = []
         self.rep_force_buf = []
-        self.session_baseline_rom = 0.0
+        self.session_baseline_rom = self.current_rom
 
         # Clear curves and reset plot viewports cleanly to 0.0s for the new test
         self.curve_rom.setData([], [])
@@ -970,30 +1110,46 @@ class LiveTestScreen(QWidget):
             self.hw.connect()
 
         if self.hw.is_connected:
-            self.hw.start_streaming(target_resistance=target_resistance)
+            if not self.hw.is_streaming:
+                self.hw.start_streaming(target_resistance=target_resistance)
+            else:
+                self.hw.set_resistance(target_resistance)
             self.lbl_status.setText("● RECORDING (Live)")
             self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
         else:
             self.lbl_status.setText("● RECORDING (Simulated)")
             self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
 
-        self.timer.start()
+        if not self.timer.isActive():
+            self.timer.start()
 
     def _stop_test(self):
-        self.timer.stop()
         self.is_running = False
 
         if self.hw.is_connected:
             self.hw.set_resistance(0.0)
-            self.hw.stop_streaming()
 
         self.lbl_status.setText("● COMPLETE — Save or Discard?")
         self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['warning']};")
 
-        self.btn_start_stop.setVisible(False)
+        self.btn_start_stop.setVisible(True)
+        self.btn_start_stop.setText("▶  Start New Test")
+        self.btn_start_stop.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 15px;
+                font-weight: bold;
+                background-color: {COLORS['accent_dark']};
+                border: 2px solid {COLORS['accent']};
+                border-radius: 8px;
+                color: white;
+            }}
+            QPushButton:hover {{
+                background-color: {COLORS['accent']};
+            }}
+        """)
         self.btn_save.setVisible(True)
         self.btn_discard.setVisible(True)
-        self.spin_resistance.setEnabled(False)
+        self.spin_resistance.setEnabled(True)
         self.btn_zero.setEnabled(True)
 
     def _save_test(self):
@@ -1002,14 +1158,18 @@ class LiveTestScreen(QWidget):
             return
 
         target_resistance = self.spin_resistance.value()
+        forearm_pin = self.get_forearm_pin()
+        forearm_inches = self.get_forearm_inches()
         observed_max_rom = self.max_session_rom if self.max_session_rom > 0 else (max(self.full_rom_data) if self.full_rom_data else 0.0)
         observed_max_force = self.max_session_force if self.max_session_force > 0 else (max(self.full_force_data) if self.full_force_data else 0.0)
+        peak_torque_in_lb = observed_max_force * forearm_inches
 
         deficit_str = f"Stall at {self.last_deficit_angle:.1f}° ({self.last_deficit_force:.1f} lbs)" if self.last_deficit_angle else "Full Strength"
-        notes = f"Reps: {self.reps_count} | Peak ROM: {observed_max_rom:.1f}° | Peak Force: {observed_max_force:.1f} lbs | Deficit: {deficit_str} | Work: {self.therapy_work_j:.0f} J"
+        notes = f"Reps: {self.reps_count} | Peak ROM: {observed_max_rom:.1f}° | Peak Force: {observed_max_force:.1f} lbs ({peak_torque_in_lb:.1f} in-lb) | Forearm: Pin {forearm_pin} ({forearm_inches:.0f}\") | Deficit: {deficit_str} | Work: {self.therapy_work_j:.0f} J"
 
         session_id = self.db.create_session(
-            self.client_id, target_resistance, round(observed_max_rom, 1), notes=notes
+            self.client_id, target_resistance, round(observed_max_rom, 1),
+            notes=notes, forearm_pin=forearm_pin, forearm_length_in=forearm_inches
         )
         self.db.save_test_data_batch(
             session_id,
@@ -1021,53 +1181,29 @@ class LiveTestScreen(QWidget):
         )
         self.db.complete_session(session_id)
 
-        self.lbl_status.setText("● SAVED TO DATABASE")
-        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
-        self.btn_save.setVisible(False)
-        self.btn_discard.setVisible(False)
-        self.btn_start_stop.setVisible(True)
-        self.btn_start_stop.setText("▶  Start New Test")
-        self.btn_start_stop.setStyleSheet(f"""
-            QPushButton {{
-                font-size: 15px;
-                font-weight: bold;
-                background-color: {COLORS['accent_dark']};
-                border: 2px solid {COLORS['accent']};
-                border-radius: 8px;
-                color: white;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['accent']};
-            }}
-        """)
-        self.spin_resistance.setEnabled(True)
-        self.btn_zero.setEnabled(True)
-
         self.test_completed.emit(session_id)
+        self._reset()
+        self.lbl_status.setText("● SAVED TO DATABASE — Live Preview Ready")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
 
     def _discard_test(self):
         self._reset()
-        self.lbl_status.setText("● DISCARDED")
+        self.lbl_status.setText("● DISCARDED — Live Preview Ready")
         self.lbl_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['danger']};")
-        self.btn_save.setVisible(False)
-        self.btn_discard.setVisible(False)
-        self.btn_start_stop.setVisible(True)
-        self.btn_start_stop.setText("▶  Start New Test")
-        self.btn_start_stop.setStyleSheet(f"""
-            QPushButton {{
-                font-size: 15px;
-                font-weight: bold;
-                background-color: {COLORS['accent_dark']};
-                border: 2px solid {COLORS['accent']};
-                border-radius: 8px;
-                color: white;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['accent']};
-            }}
-        """)
-        self.spin_resistance.setEnabled(True)
-        self.btn_zero.setEnabled(True)
+
+    def _append_preview_sample(self, t_val, rom, speed, force, spo2):
+        """Append rolling live sensor sample for pre-test and post-test visual preview."""
+        self.time_data.append(t_val)
+        self.rom_data.append(rom)
+        self.speed_data.append(speed)
+        self.force_data.append(force)
+        self.spo2_data.append(spo2)
+        if len(self.time_data) > self.MAX_POINTS:
+            self.time_data = self.time_data[-self.MAX_POINTS:]
+            self.rom_data = self.rom_data[-self.MAX_POINTS:]
+            self.speed_data = self.speed_data[-self.MAX_POINTS:]
+            self.force_data = self.force_data[-self.MAX_POINTS:]
+            self.spo2_data = self.spo2_data[-self.MAX_POINTS:]
 
     def _append_sample(self, t_val, rom, speed, force, spo2):
         self.full_time_data.append(t_val)
@@ -1105,7 +1241,8 @@ class LiveTestScreen(QWidget):
         if len(self.full_rom_data) >= 2:
             d_rom = self.full_rom_data[-1] - self.full_rom_data[-2]
             if d_rom > 0 and speed > 5.0:
-                d_s = 0.3048 * (d_rom * np.pi / 180.0)
+                forearm_m = self.get_forearm_meters()
+                d_s = forearm_m * (d_rom * np.pi / 180.0)
                 f_newtons = force * 4.44822
                 self.therapy_work_j += f_newtons * d_s
 
@@ -1158,34 +1295,69 @@ class LiveTestScreen(QWidget):
                 self.rep_force_buf = []
 
     def _update_data(self):
-        self.elapsed_time = time.time() - self._start_time
-        new_data = False
+        if self.is_running:
+            self.elapsed_time = time.time() - self._start_time
         target_r = self.spin_resistance.value()
+        new_data = False
+
+        # Continuously poll samples and auto-reconnect if MCU was reset via NRST
+        samples = self.hw.read_samples()
 
         if self.hw.is_connected:
-            samples = self.hw.read_samples()
+            if "RECONNECTING" in self.lbl_status.text() and not self.is_running and not self.btn_save.isVisible():
+                self.lbl_status.setText("● LIVE PREVIEW (Hardware Ready — Click 'Start Test' to Record)")
+                self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
+
             if samples:
                 for sample in samples:
                     t_ms = sample[0]
                     rom = sample[2]
                     speed = sample[3]
                     load = sample[4]
-                    spo2 = float(sample[6]) if len(sample) > 6 else 98.0
-                    if self._hw_start_ms is None:
-                        self._hw_start_ms = t_ms
-                    sample_time = max(0.0, (t_ms - self._hw_start_ms) / 1000.0)
+                    spo2 = float(sample[6]) if len(sample) > 6 else 0.0
                     force_val = max(0.0, float(load))
-                    self._append_sample(sample_time, rom, speed, force_val, spo2)
-                new_data = True
-            elif not self.time_data:
-                self._append_sample(0.0, self.hw.last_angle, self.hw.last_velocity, max(0.0, float(self.hw.last_load_cell)), getattr(self.hw, 'last_spo2', 98.0))
-                new_data = True
-        elif self.generator:
-            rom, speed, force_val, spo2 = self.generator.next_sample(self.elapsed_time)
-            self._append_sample(self.elapsed_time, rom, speed, force_val, spo2)
-            new_data = True
 
-        if new_data and self.time_data:
+                    self.current_rom = rom
+                    self.current_speed = speed
+                    self.current_force = force_val
+                    self.current_spo2 = spo2
+
+                    if self.is_running:
+                        if self._hw_start_ms is None:
+                            self._hw_start_ms = t_ms
+                        sample_time = max(0.0, (t_ms - self._hw_start_ms) / 1000.0)
+                        self._append_sample(sample_time, rom, speed, force_val, spo2)
+                    elif not self.btn_save.isVisible():
+                        self.preview_time += (1.0 / 50.0)
+                        self._append_preview_sample(self.preview_time, rom, speed, force_val, spo2)
+                new_data = True
+            elif not self.time_data and not self.is_running and not self.btn_save.isVisible():
+                self.preview_time += self.dt
+                self._append_preview_sample(self.preview_time, self.hw.last_angle, self.hw.last_velocity,
+                                            max(0.0, float(self.hw.last_load_cell)),
+                                            getattr(self.hw, 'last_spo2', 0.0))
+                new_data = True
+        else:
+            if not self.is_running and not self.btn_save.isVisible() and "RECONNECTING" not in self.lbl_status.text() and "HOMING" not in self.lbl_status.text():
+                self.lbl_status.setText("● RECONNECTING TO HARDWARE (Push NRST or Plug USB)...")
+                self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 14px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['warning']};")
+            if self.generator:
+                self.preview_time += self.dt
+                sample_clock = (time.time() - self._start_time) if self.is_running else self.preview_time
+                rom, speed, force_val, spo2 = self.generator.next_sample(sample_clock)
+                self.current_rom = rom
+                self.current_speed = speed
+                self.current_force = force_val
+                self.current_spo2 = spo2
+
+                if self.is_running:
+                    sample_time = max(0.0, time.time() - self._start_time)
+                    self._append_sample(sample_time, rom, speed, force_val, spo2)
+                elif not self.btn_save.isVisible():
+                    self._append_preview_sample(self.preview_time, rom, speed, force_val, spo2)
+                new_data = True
+
+        if new_data and self.time_data and (self.is_running or not self.btn_save.isVisible()):
             t = np.array(self.time_data)
             rom_arr = np.array(self.rom_data)
             force_arr = np.array(self.force_data)
@@ -1224,8 +1396,9 @@ class LiveTestScreen(QWidget):
                 else:
                     recent_pts = min(len(rom_arr), 300)
                     self.curve_force_live.setData(rom_arr[-recent_pts:], force_arr[-recent_pts:])
+                    self.plot_force.setXRange(0.0, 160.0, padding=0)
                     self.lbl_target_force_line.setPos(155, target_r)
-                    if self.last_deficit_angle is not None:
+                    if self.is_running and self.last_deficit_angle is not None:
                         self.deficit_marker.setData([self.last_deficit_angle], [self.last_deficit_force])
                         self.deficit_callout.setPos(self.last_deficit_angle, self.last_deficit_force)
                         self.deficit_callout.setText(f"Stall: {self.last_deficit_angle:.1f}° ({self.last_deficit_force:.1f} lbs)")
@@ -1233,19 +1406,45 @@ class LiveTestScreen(QWidget):
                         self.deficit_marker.setData([], [])
                         self.deficit_callout.setText("")
 
-            # Update HUD Cards
+        # Update HUD Cards
+        if self.is_running:
             self.lbl_hud_reps.setText(f"{self.reps_count} Reps")
             self.lbl_hud_rom.setText(f"{self.max_session_rom:.1f}°")
-            self.lbl_hud_rom_sub.setText(f"Current: {rom_arr[-1]:.1f}°")
-            self.lbl_hud_force.setText(f"{force_arr[-1]:.1f} lbs")
+            self.lbl_hud_rom_sub.setText(f"Current: {self.current_rom:.1f}°")
+            self.lbl_hud_force.setText(f"{self.current_force:.1f} lbs")
             if self.last_deficit_angle is not None:
                 self.lbl_hud_force_sub.setText(f"Stall: {self.last_deficit_angle:.1f}° ({self.last_deficit_force:.1f} lbs)")
                 self.lbl_hud_force_sub.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {COLORS['warning']};")
             else:
-                self.lbl_hud_force_sub.setText(f"Peak: {self.max_session_force:.1f} lbs • Target: {target_r:.1f} lbs")
+                peak_torque_in_lb = self.max_session_force * self.get_forearm_inches()
+                self.lbl_hud_force_sub.setText(f"Peak: {self.max_session_force:.1f} lbs ({peak_torque_in_lb:.1f} in-lb) • Target: {target_r:.1f} lbs")
                 self.lbl_hud_force_sub.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {COLORS['text_muted']};")
             self.lbl_hud_work.setText(f"{self.therapy_work_j:.0f} J")
-            self.lbl_hud_spo2.setText(f"{self.current_spo2:.0f}%")
+            self.lbl_hud_work_sub.setText(f"Pin {self.get_forearm_pin()} ({self.get_forearm_inches():.0f}\") Energy")
+            if self.time_data:
+                self.lbl_timer.setText(f"{self.time_data[-1]:.1f} s")
+        elif not self.btn_save.isVisible():
+            # Preview mode before test
+            self.lbl_hud_reps.setText("0 Reps")
+            self.lbl_hud_rom.setText(f"{self.current_rom:.1f}°")
+            self.lbl_hud_rom_sub.setText(f"Live Angle: {self.current_rom:.1f}°")
+            self.lbl_hud_force.setText(f"{self.current_force:.1f} lbs")
+            self.lbl_hud_force_sub.setText(f"Live Sensor • Target: {target_r:.1f} lbs")
+            self.lbl_hud_work.setText("0 J")
+            self.lbl_timer.setText("Ready (0.0 s)")
+        else:
+            # Post-test review mode (Save/Discard visible)
+            self.lbl_hud_rom_sub.setText(f"Live: {self.current_rom:.1f}°")
+            self.lbl_hud_force.setText(f"{self.current_force:.1f} lbs")
 
-            # Update timer
-            self.lbl_timer.setText(f"{self.time_data[-1]:.1f} s")
+        # SpO2 Vitals Display (always updates)
+        if self.current_spo2 > 0.0:
+            self.lbl_hud_spo2.setText(f"{self.current_spo2:.0f}%")
+            self.lbl_hud_spo2.setStyleSheet(f"font-size: 26px; font-weight: bold; color: {COLORS.get('accent_cyan', '#00e5ff')};")
+            self.lbl_hud_spo2_sub.setText("● Sensor Active")
+            self.lbl_hud_spo2_sub.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {COLORS['accent']};")
+        else:
+            self.lbl_hud_spo2.setText("---%")
+            self.lbl_hud_spo2.setStyleSheet(f"font-size: 26px; font-weight: bold; color: {COLORS['text_muted']};")
+            self.lbl_hud_spo2_sub.setText("Place Finger on Sensor")
+            self.lbl_hud_spo2_sub.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {COLORS['text_muted']};")

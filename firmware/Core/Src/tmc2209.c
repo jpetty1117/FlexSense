@@ -12,6 +12,8 @@
 
 #include "tmc2209.h"
 #include <string.h>
+#include <stdio.h>
+#include <math.h>
 
 #define TMC2209_UART_TX_PIN         GPIO_PIN_2
 #define TMC2209_UART_TX_PORT        GPIOA
@@ -20,9 +22,16 @@
 
 /* Private Module Variables */
 static UART_HandleTypeDef s_tmc_uart;
+static uint8_t             s_slave_addr      = 0;          /* Dynamic slave address (0..3) */
 static bool                s_is_initialized  = false;
 static uint32_t            s_gconf_shadow    = 0;
 static uint32_t            s_chopconf_shadow = 0x10000053; /* Default chopper */
+
+static uint8_t             s_diag_tx_status  = 0xFF;
+static uint8_t             s_diag_rx_status  = 0xFF;
+static uint8_t             s_diag_rx[8]      = {0};
+static uint8_t             s_diag_rx_count   = 0;
+static uint32_t            s_diag_sr         = 0;
 
 /* Private Function Prototypes */
 static uint8_t TMC2209_CalcCRC(const uint8_t *datagram, uint8_t datagram_len);
@@ -71,7 +80,7 @@ bool TMC2209_WriteRegister(uint8_t reg, uint32_t data)
 {
   uint8_t tx[8];
   tx[0] = 0x05;                        /* Sync nibble */
-  tx[1] = 0x00;                        /* Slave address (0) */
+  tx[1] = s_slave_addr;                /* Slave address (0..3) */
   tx[2] = (uint8_t)(reg | 0x80);       /* Register address with write bit */
   tx[3] = (uint8_t)((data >> 24) & 0xFF);
   tx[4] = (uint8_t)((data >> 16) & 0xFF);
@@ -79,7 +88,9 @@ bool TMC2209_WriteRegister(uint8_t reg, uint32_t data)
   tx[6] = (uint8_t)(data & 0xFF);
   tx[7] = TMC2209_CalcCRC(tx, 8);
 
+  HAL_HalfDuplex_EnableTransmitter(&s_tmc_uart);
   HAL_StatusTypeDef status = HAL_UART_Transmit(&s_tmc_uart, tx, 8, 20);
+  HAL_HalfDuplex_EnableReceiver(&s_tmc_uart);
 
   /* Small inter-datagram gap (min 8 bit times = ~70 us) */
   for ( volatile int i = 0; i < 200; i++ )
@@ -108,25 +119,34 @@ bool TMC2209_ReadRegister(uint8_t reg, uint32_t *data)
 
   uint8_t req[4];
   req[0] = 0x05;                       /* Sync nibble */
-  req[1] = 0x00;                       /* Slave address (0) */
+  req[1] = s_slave_addr;               /* Slave address (0..3) */
   req[2] = (uint8_t)(reg & 0x7F);      /* Register address with read bit (0) */
   req[3] = TMC2209_CalcCRC(req, 4);
 
+  /* Clear any prior errors before transmitting */
+  __HAL_UART_CLEAR_OREFLAG(&s_tmc_uart);
+  __HAL_UART_CLEAR_NEFLAG(&s_tmc_uart);
+  __HAL_UART_CLEAR_FEFLAG(&s_tmc_uart);
+
+  HAL_HalfDuplex_EnableTransmitter(&s_tmc_uart);
   HAL_StatusTypeDef tx_status = HAL_UART_Transmit(&s_tmc_uart, req, 4, 15);
+  HAL_HalfDuplex_EnableReceiver(&s_tmc_uart);
 
-  /* In single-wire / 2-wire resistor mode, discard the 4-byte transmitted echo */
-  uint8_t echo[4];
-  HAL_UART_Receive(&s_tmc_uart, echo, 4, 10);
-
+  s_diag_tx_status = (uint8_t)tx_status;
   if ( tx_status != HAL_OK )
   {
     return false;
   }
 
-  /* Receive 8-byte response datagram from TMC2209 */
+  /* Receive 8-byte response datagram directly on PA2 from TMC2209 */
   uint8_t rx[8];
   memset(rx, 0, sizeof(rx));
-  HAL_StatusTypeDef rx_status = HAL_UART_Receive(&s_tmc_uart, rx, 8, 25);
+  HAL_StatusTypeDef rx_status = HAL_UART_Receive(&s_tmc_uart, rx, 8, 30);
+
+  s_diag_rx_status = (uint8_t)rx_status;
+  s_diag_sr        = s_tmc_uart.Instance->SR;
+  s_diag_rx_count  = (uint8_t)(8 - s_tmc_uart.RxXferCount);
+  memcpy(s_diag_rx, rx, 8);
 
   if ( rx_status != HAL_OK )
   {
@@ -152,7 +172,29 @@ bool TMC2209_ReadRegister(uint8_t reg, uint32_t *data)
   return true;
 } /* TMC2209_ReadRegister() */
 
+/* Format diagnostic telemetry into buffer when driver is offline
+** Parameters:
+**   buf - Destination string buffer
+**   max_len - Maximum buffer capacity
+*/
+void TMC2209_GetDiagnostic(char *buf, size_t max_len)
+{
+  uint8_t pa2   = (uint8_t)HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+  uint8_t diag  = (uint8_t)HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
+  uint8_t index = (uint8_t)HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+  uint8_t ms1   = (uint8_t)HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_7);
+  uint8_t ms2   = (uint8_t)HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+
+  snprintf(buf, max_len,
+           "ACK:TMC:ONLINE=0,BAUD=%lu,ADDR=%u,TX=%u,RX=%u,CNT=%u,RAW=%02X%02X%02X%02X%02X%02X%02X%02X,PA2=%u,DIAG=%u,INDEX=%u,MS1=%u,MS2=%u,SR=0x%02lX\r\n",
+           (unsigned long)s_tmc_uart.Init.BaudRate, s_slave_addr, s_diag_tx_status, s_diag_rx_status, s_diag_rx_count,
+           s_diag_rx[0], s_diag_rx[1], s_diag_rx[2], s_diag_rx[3],
+           s_diag_rx[4], s_diag_rx[5], s_diag_rx[6], s_diag_rx[7],
+           pa2, diag, index, ms1, ms2, (unsigned long)s_diag_sr);
+} /* TMC2209_GetDiagnostic() */
+
 /* Verify active UART communications with TMC2209 by reading IFCNT
+** Automatically probes all 4 possible slave addresses (0..3) if needed
 ** Parameters:
 **   None
 ** Return:
@@ -163,7 +205,28 @@ bool TMC2209_ReadRegister(uint8_t reg, uint32_t *data)
 bool TMC2209_Ping(void)
 {
   uint32_t ifcnt = 0;
-  return TMC2209_ReadRegister(TMC2209_REG_IFCNT, &ifcnt);
+  if ( TMC2209_ReadRegister(TMC2209_REG_IFCNT, &ifcnt) )
+  {
+    return true;
+  }
+
+  /* Probe other slave addresses in case MS1/MS2 bootstrapped to 1, 2, or 3 */
+  uint8_t saved_addr = s_slave_addr;
+  for ( uint8_t addr = 0; addr < 4; addr++ )
+  {
+    if ( addr == saved_addr )
+    {
+      continue;
+    }
+    s_slave_addr = addr;
+    if ( TMC2209_ReadRegister(TMC2209_REG_IFCNT, &ifcnt) )
+    {
+      return true;
+    }
+  }
+
+  s_slave_addr = saved_addr;
+  return false;
 } /* TMC2209_Ping() */
 
 /* Initialize hardware UART peripheral and configure TMC2209 with optimal defaults
@@ -180,7 +243,7 @@ bool TMC2209_Init(void)
   __HAL_RCC_USART2_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
-  /* 2. Configure GPIO Pin for USART2 (PA2 TX) */
+  /* 2. Configure GPIO Pin for USART2 (PA2 TX/Single-Wire Push-Pull with internal Pull-up) */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   GPIO_InitStruct.Pin       = TMC2209_UART_TX_PIN;
   GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
@@ -189,30 +252,50 @@ bool TMC2209_Init(void)
   GPIO_InitStruct.Alternate = GPIO_AF7_USART2;
   HAL_GPIO_Init(TMC2209_UART_TX_PORT, &GPIO_InitStruct);
 
-  /* 3. Configure USART2 Peripheral Handle */
-  s_tmc_uart.Instance                    = USART2;
-  s_tmc_uart.Init.BaudRate               = TMC2209_DEFAULT_BAUD;
-  s_tmc_uart.Init.WordLength             = UART_WORDLENGTH_8B;
-  s_tmc_uart.Init.StopBits               = UART_STOPBITS_1;
-  s_tmc_uart.Init.Parity                 = UART_PARITY_NONE;
-  s_tmc_uart.Init.Mode                   = UART_MODE_TX_RX;
-  s_tmc_uart.Init.HwFlowCtl              = UART_HWCONTROL_NONE;
-  s_tmc_uart.Init.OverSampling           = UART_OVERSAMPLING_16;
-  HAL_UART_Init(&s_tmc_uart);
+  /* 3. Configure USART2 Peripheral Handle in Single-Wire Half-Duplex mode */
+  s_tmc_uart.Instance          = USART2;
+  s_tmc_uart.Init.WordLength   = UART_WORDLENGTH_8B;
+  s_tmc_uart.Init.StopBits     = UART_STOPBITS_1;
+  s_tmc_uart.Init.Parity       = UART_PARITY_NONE;
+  s_tmc_uart.Init.Mode         = UART_MODE_TX_RX;
+  s_tmc_uart.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
+  s_tmc_uart.Init.OverSampling = UART_OVERSAMPLING_16;
 
-  /* 4. Small delay to allow TMC2209 internal PLL to settle after power-up */
-  HAL_Delay(10);
+  /* Standard baud rates to probe (115200 standard, fallback to 57600, 19200) */
+  const uint32_t bauds[] = { 115200, 57600, 19200 };
+  const size_t num_bauds = sizeof(bauds) / sizeof(bauds[0]);
 
-  /* 5. Ping TMC2209 to verify link */
+  s_gconf_shadow = TMC2209_GCONF_MSTEP_REG_SELECT |
+                   TMC2209_GCONF_PDN_DISABLE      |
+                   TMC2209_GCONF_MULTISTEP_FILT;
+
   bool link_ok = false;
-  for ( int attempt = 0; attempt < 3; attempt++ )
+
+  for ( size_t b = 0; b < num_bauds && !link_ok; b++ )
   {
-    if ( TMC2209_Ping() )
+    s_tmc_uart.Init.BaudRate = bauds[b];
+    HAL_HalfDuplex_Init(&s_tmc_uart);
+    HAL_HalfDuplex_EnableReceiver(&s_tmc_uart);
+    HAL_Delay(10);
+
+    /* Write GCONF with pdn_disable=1 across addresses 0..3 to unlock bidirectional UART mode */
+    for ( uint8_t addr = 0; addr < 4; addr++ )
     {
-      link_ok = true;
-      break;
+      s_slave_addr = addr;
+      TMC2209_WriteRegister(TMC2209_REG_GCONF, s_gconf_shadow);
+      HAL_Delay(2);
     }
-    HAL_Delay(5);
+
+    /* Probe IFCNT to detect response */
+    for ( int attempt = 0; attempt < 4; attempt++ )
+    {
+      if ( TMC2209_Ping() )
+      {
+        link_ok = true;
+        break;
+      }
+      HAL_Delay(5);
+    }
   }
 
   if ( !link_ok )
@@ -221,14 +304,11 @@ bool TMC2209_Init(void)
     return false;
   }
 
-  /* 6. Configure Base Global Configuration (GCONF) */
-  s_gconf_shadow = TMC2209_GCONF_MSTEP_REG_SELECT |
-                   TMC2209_GCONF_PDN_DISABLE      |
-                   TMC2209_GCONF_MULTISTEP_FILT;
+  /* 6. Commit final Base Global Configuration */
   TMC2209_WriteRegister(TMC2209_REG_GCONF, s_gconf_shadow);
 
-  /* 7. Set Standard Running Current (1000 mA RMS, 50% hold current) */
-  TMC2209_SetCurrent(1000, 50);
+  /* 7. Set Standard Running Current (1.3 A / 1300 mA RMS limit over UART, 50% hold current) */
+  TMC2209_SetCurrent(1300, 50);
 
   /* 8. Configure 1/16 Microstepping with 256-Microstep Interpolation */
   TMC2209_SetMicrostepping(16, true);
@@ -248,7 +328,7 @@ bool TMC2209_Init(void)
 
 /* Program digital RMS coil current in milliamps and standstill hold percentage
 ** Parameters:
-**   run_current_mA - Commanded running current (e.g. 800 to 1400 mA RMS)
+**   run_current_mA - Commanded running current (e.g. 800 to 1700 mA RMS)
 **   hold_percent - Standstill current as percentage of run current (0 to 100%)
 ** Return:
 **   bool: True if successfully written
@@ -268,7 +348,7 @@ bool TMC2209_SetCurrent(uint16_t run_current_mA, uint8_t hold_percent)
 
   /* Maximum RMS current for Rsense = 0.11 ohms at CS = 31 is ~1770 mA */
   float max_rms_mA = 1770.0f;
-  int cs = (int)(((float)run_current_mA / max_rms_mA) * 32.0f) - 1;
+  int cs = (int)lroundf(((float)run_current_mA / max_rms_mA) * 32.0f) - 1;
   if ( cs < 0 )
   {
     cs = 0;

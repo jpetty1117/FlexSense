@@ -45,17 +45,31 @@ extern "C" {
 #define MOTOR_STEPS_PER_MM          ((MOTOR_FULL_STEPS_PER_REV * MOTOR_DEFAULT_MICROSTEP) / MOTOR_LEAD_SCREW_PITCH_MM)
 #define MOTOR_MIN_STEP_INTERVAL_US  100       /* microseconds */
 
-/* Hardware Pin Allocations */
-#define MOTOR_STEP_PIN              GPIO_PIN_4
-#define MOTOR_STEP_PORT             GPIOA
-#define MOTOR_DIR_PIN               GPIO_PIN_5
+/* Hardware Pin Allocations (Adafruit TMC2209 Breakout) */
+#define MOTOR_DIR_PIN               GPIO_PIN_4
 #define MOTOR_DIR_PORT              GPIOA
+#define MOTOR_STEP_PIN              GPIO_PIN_5
+#define MOTOR_STEP_PORT             GPIOA
 #define MOTOR_EN_PIN                GPIO_PIN_6
 #define MOTOR_EN_PORT               GPIOA
+#define MOTOR_MS1_PIN               GPIO_PIN_7
+#define MOTOR_MS1_PORT              GPIOA
+#define MOTOR_MS2_PIN               GPIO_PIN_0
+#define MOTOR_MS2_PORT              GPIOB
+#define MOTOR_DIAG_PIN              GPIO_PIN_1
+#define MOTOR_DIAG_PORT             GPIOB
+#define MOTOR_INDEX_PIN             GPIO_PIN_3
+#define MOTOR_INDEX_PORT            GPIOA
+#define MOTOR_LIMIT_PIN             GPIO_PIN_12
+#define MOTOR_LIMIT_PORT            GPIOB
 
 /* Driver enable levels */
 #define MOTOR_EN_ACTIVE_LEVEL       GPIO_PIN_RESET
 #define MOTOR_EN_INACTIVE_LEVEL     GPIO_PIN_SET
+
+/* TMC2209 UART Current Limits */
+#define TMC2209_DEFAULT_RUN_CURRENT_MA 1300   /* 1.3 A RMS driver coil current limit */
+#define TMC2209_DEFAULT_HOLD_PERCENT   50     /* 50% hold current at standstill */
 
 #include "tmc2209.h"
 
@@ -81,7 +95,16 @@ bool     Motor_SetDriverCurrent(uint16_t run_mA, uint8_t hold_percent);
 bool     Motor_SetDriverStealthChop(bool enable);
 bool     Motor_SetDriverCoolStep(uint8_t semin, uint8_t semax);
 bool     Motor_SetDriverStallGuardThreshold(uint8_t threshold);
+void     Motor_SetHomingStallGuardThreshold(uint8_t threshold);
+uint8_t  Motor_GetHomingStallGuardThreshold(void);
+void     Motor_SetHomingSpeedUs(uint32_t speed_us);
+uint32_t Motor_GetHomingSpeedUs(void);
+void     Motor_SetHomingCurrentMa(uint16_t ma);
+uint16_t Motor_GetHomingCurrentMa(void);
 bool     Motor_SensorlessHome(void);
+bool     Motor_IsLimitSwitchTriggered(void);
+bool     Motor_Home(void);
+const char *Motor_GetHomingDiagnostic(void);
 
 #ifdef __cplusplus
 }

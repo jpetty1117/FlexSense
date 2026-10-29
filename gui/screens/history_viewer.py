@@ -407,11 +407,13 @@ class HistoryViewerScreen(QWidget):
         # Update session info
         notes_raw = session.get('notes', '') or 'N/A'
         notes_formatted = notes_raw.replace(' | ', '\n')
+        forearm_info = f"Forearm Setting: Pin {session['forearm_pin']} ({session.get('forearm_length_in', 12.0):.0f}\")\n" if session.get('forearm_pin') else ""
 
         self.lbl_session_info.setText(
             f"Date: {session['date'][:19]}\n"
             f"Target Resistance: {session['target_resistance']} lbs\n"
             f"Max ROM: {session['target_angle']}°\n"
+            f"{forearm_info}"
             f"Status: {session.get('status', 'completed')}\n\n"
             f"[PT Metrics]\n{notes_formatted}"
         )

@@ -509,6 +509,8 @@ class RehabTestApp(QMainWindow):
         QApplication.instance().quit()
 
     def closeEvent(self, event):
+        if hasattr(self, 'live_test'):
+            self.live_test.cleanup()
         self.db.close()
         event.accept()
 

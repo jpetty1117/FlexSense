@@ -25,6 +25,8 @@ COLORS = {
     "graph_speed": "#58a6ff",
     "graph_strength": "#f0883e",
     "graph_spo2": "#f778ba",
+    "accent_cyan": "#00e5ff",
+    "success": "#16c79a",
 }
 
 
@@ -136,7 +138,7 @@ STYLESHEET = f"""
     }}
 
     /* ── Inputs ──────────────────────────────────── */
-    QLineEdit, QTextEdit, QDateEdit, QSpinBox, QDoubleSpinBox {{
+    QLineEdit, QTextEdit, QDateEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {COLORS['bg_input']};
         color: {COLORS['text_primary']};
         border: 1px solid {COLORS['border']};
@@ -146,11 +148,11 @@ STYLESHEET = f"""
     }}
 
     QLineEdit:focus, QTextEdit:focus, QDateEdit:focus,
-    QSpinBox:focus, QDoubleSpinBox:focus {{
+    QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
         border-color: {COLORS['border_focus']};
     }}
 
-    QDateEdit::drop-down {{
+    QDateEdit::drop-down, QComboBox::drop-down {{
         subcontrol-origin: padding;
         subcontrol-position: center right;
         width: 28px;
@@ -160,7 +162,7 @@ STYLESHEET = f"""
         border-bottom-right-radius: 6px;
     }}
 
-    QDateEdit::down-arrow {{
+    QDateEdit::down-arrow, QComboBox::down-arrow {{
         image: none;
         width: 0;
         height: 0;
@@ -169,8 +171,18 @@ STYLESHEET = f"""
         border-top: 6px solid {COLORS['accent']};
     }}
 
-    QDateEdit::drop-down:hover {{
+    QDateEdit::drop-down:hover, QComboBox::drop-down:hover {{
         background-color: {COLORS['accent_dark']};
+    }}
+
+    QComboBox QAbstractItemView {{
+        background-color: {COLORS['bg_card']};
+        color: {COLORS['text_primary']};
+        selection-background-color: {COLORS['accent_dark']};
+        selection-color: white;
+        border: 1px solid {COLORS['border']};
+        outline: none;
+        padding: 4px;
     }}
 
     /* Calendar popup styling */

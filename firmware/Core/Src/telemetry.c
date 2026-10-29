@@ -120,6 +120,61 @@ static SystemCommand_t ProcessIncomingChar(char c)
       {
         return CMD_TMC;
       }
+      else if ( strcasecmp(s_cmd_buf, "SPO2") == 0 )
+      {
+        return CMD_SPO2;
+      }
+      else if ( (strcasecmp(s_cmd_buf, "HOME") == 0) || (strcasecmp(s_cmd_buf, "H") == 0) )
+      {
+        return CMD_HOME;
+      }
+      else if ( (strcasecmp(s_cmd_buf, "TARE") == 0) || (strcasecmp(s_cmd_buf, "T") == 0) )
+      {
+        return CMD_TARE;
+      }
+      else if ( (strcasecmp(s_cmd_buf, "DFU") == 0) || (strcasecmp(s_cmd_buf, "BOOTLOADER") == 0) )
+      {
+        return CMD_DFU;
+      }
+      else if ( (strncasecmp(s_cmd_buf, "HOMETHR", 7) == 0) || (strncasecmp(s_cmd_buf, "SGTHR", 5) == 0) )
+      {
+        const char *p = (strncasecmp(s_cmd_buf, "HOMETHR", 7) == 0) ? &s_cmd_buf[7] : &s_cmd_buf[5];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_HOMETHR;
+        }
+      }
+      else if ( (strncasecmp(s_cmd_buf, "HOMESPEED", 9) == 0) || (strncasecmp(s_cmd_buf, "HSPEED", 6) == 0) )
+      {
+        const char *p = (strncasecmp(s_cmd_buf, "HOMESPEED", 9) == 0) ? &s_cmd_buf[9] : &s_cmd_buf[6];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_HOMESPEED;
+        }
+      }
+      else if ( (strncasecmp(s_cmd_buf, "HOMECURR", 8) == 0) || (strncasecmp(s_cmd_buf, "HCURR", 5) == 0) )
+      {
+        const char *p = (strncasecmp(s_cmd_buf, "HOMECURR", 8) == 0) ? &s_cmd_buf[8] : &s_cmd_buf[5];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_HOMECURR;
+        }
+      }
       else if ( (strncasecmp(s_cmd_buf, "RES", 3) == 0) || (strncasecmp(s_cmd_buf, "SET", 3) == 0) )
       {
         /* Support "RES 10.5", "RES:10.5", "RES=10.5", "SET 10.5", etc. */
@@ -132,6 +187,29 @@ static SystemCommand_t ProcessIncomingChar(char c)
         {
           s_cmd_param = (float)strtod(p, (char **)0);
           return CMD_SET_RESISTANCE;
+        }
+      }
+      else if ( strncasecmp(s_cmd_buf, "CURR", 4) == 0 )
+      {
+        /* Support "CURR 1700", "CURR 1.7", "CURR:1700", etc. */
+        const char *p = &s_cmd_buf[4];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          float c = (float)strtod(p, (char **)0);
+          /* If given in Amperes (e.g. 1.7), convert to mA (1700) */
+          if ( c < 10.0f )
+          {
+            s_cmd_param = c * 1000.0f;
+          }
+          else
+          {
+            s_cmd_param = c;
+          }
+          return CMD_SET_CURRENT;
         }
       }
     }

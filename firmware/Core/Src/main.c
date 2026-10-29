@@ -21,6 +21,7 @@
 #include "load_cell.h"
 #include "motor.h"
 #include "spo2.h"
+#include "usbd_core.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -43,7 +44,6 @@ typedef enum
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 static SystemState_t s_sys_state = SYS_STATE_IDLE;
@@ -53,7 +53,6 @@ static uint32_t      s_stream_start_tick = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 /* USER CODE END PFP */
 
@@ -90,18 +89,18 @@ int main(void)
   MX_I2C1_Init();
   MX_I2C3_Init();
   MX_USB_DEVICE_Init();
-  MX_USART2_UART_Init();
+  /* Note: USART2 is initialized in Single-Wire Half-Duplex mode inside Motor_Init() -> TMC2209_Init() */
 
   /* USER CODE BEGIN 2 */
   /* Initialize all modular hardware and communication subsystems */
   Encoder_Init(&htim2);
-  Telemetry_Init(&huart2);
+  Telemetry_Init((UART_HandleTypeDef *)0); /* Telemetry uses USB CDC; USART2 is dedicated to TMC2209 */
   LoadCell_Init();
   Motor_Init();
   SpO2_Init();
 
   Telemetry_SendAck("\r\n=== STM32F411CE FlexSense Embedded System Ready ===\r\n");
-  Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS, RES <lbs>\r\n");
+  Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS, RES <lbs>, CURR <mA>, TMC, SPO2, HOME\r\n");
   /* Indicate boot by turning ON LED (PC13 active-low) */
   HAL_GPIO_WritePin(LED_PIN_GPIO_Port, LED_PIN_Pin, GPIO_PIN_RESET);
 
@@ -162,22 +161,128 @@ int main(void)
 
       case CMD_TMC:
         {
-          char tmc_msg[128];
+          char tmc_msg[256];
           if ( Motor_IsTMC2209Online() )
           {
             TMC2209_Status_t st;
             Motor_GetTMC2209Status(&st);
+            uint32_t ifcnt = 0, gconf = 0, gstat = 0, ioin = 0, ihold_irun = 0, drv_status = 0;
+            TMC2209_ReadRegister(TMC2209_REG_IFCNT, &ifcnt);
+            TMC2209_ReadRegister(TMC2209_REG_GCONF, &gconf);
+            TMC2209_ReadRegister(TMC2209_REG_GSTAT, &gstat);
+            TMC2209_ReadRegister(TMC2209_REG_IOIN, &ioin);
+            TMC2209_ReadRegister(TMC2209_REG_IHOLD_IRUN, &ihold_irun);
+            TMC2209_ReadRegister(TMC2209_REG_DRV_STATUS, &drv_status);
+
             snprintf(tmc_msg, sizeof(tmc_msg),
-                     "ACK:TMC:ONLINE=1,SG=%u,CS=%u,OTPW=%d,FAULT=%d\r\n",
+                     "ACK:TMC:ONLINE=1,IFCNT=%lu,GCONF=0x%lX,GSTAT=0x%lX,IOIN=0x%lX,IHOLD=0x%lX,DRV=0x%lX,SG=%u,CS=%u,OTPW=%d,FAULT=%d,STST=%d\r\n",
+                     (unsigned long)ifcnt, (unsigned long)gconf, (unsigned long)gstat,
+                     (unsigned long)ioin, (unsigned long)ihold_irun, (unsigned long)drv_status,
                      st.stallguard_result, st.current_scale,
                      st.over_temperature_warning ? 1 : 0,
-                     st.driver_fault ? 1 : 0);
+                     st.driver_fault ? 1 : 0,
+                     st.standstill ? 1 : 0);
           }
           else
           {
-            snprintf(tmc_msg, sizeof(tmc_msg), "ACK:TMC:ONLINE=0\r\n");
+            TMC2209_GetDiagnostic(tmc_msg, sizeof(tmc_msg));
           }
           Telemetry_SendAck(tmc_msg);
+        }
+        break;
+
+      case CMD_SPO2:
+        {
+          char spo2_msg[128];
+          SpO2_Diagnose(spo2_msg, sizeof(spo2_msg));
+          Telemetry_SendAck(spo2_msg);
+        }
+        break;
+
+      case CMD_SET_CURRENT:
+        {
+          uint16_t current_ma = (uint16_t)Telemetry_GetCommandParam();
+          if ( current_ma < 100 ) current_ma = 100;
+          if ( current_ma > 2000 ) current_ma = 2000;
+          bool ok = Motor_SetDriverCurrent(current_ma, 50);
+          char curr_ack[64];
+          snprintf(curr_ack, sizeof(curr_ack), "ACK:CURR:%u_MA:%s\r\n", current_ma, ok ? "OK" : "ERR");
+          Telemetry_SendAck(curr_ack);
+        }
+        break;
+
+      case CMD_HOME:
+        {
+          bool ok = Motor_Home();
+          char home_ack[96];
+          snprintf(home_ack, sizeof(home_ack), "ACK:HOME:%s,%s,CLEAR=5MM,POS=0.0\r\n",
+                   ok ? "OK" : "TIMEOUT", Motor_GetHomingDiagnostic());
+          Telemetry_SendAck(home_ack);
+        }
+        break;
+
+      case CMD_TARE:
+        {
+          bool ok = Motor_Home();
+          Encoder_Zero();
+          LoadCell_Tare();
+          char tare_ack[96];
+          snprintf(tare_ack, sizeof(tare_ack), "ACK:TARE:%s,%s,CLEAR=5MM,POS=0.0\r\n",
+                   ok ? "OK" : "TIMEOUT", Motor_GetHomingDiagnostic());
+          Telemetry_SendAck(tare_ack);
+        }
+        break;
+
+      case CMD_SET_HOMETHR:
+        {
+          uint8_t thrs = (uint8_t)Telemetry_GetCommandParam();
+          Motor_SetHomingStallGuardThreshold(thrs);
+          char thr_ack[64];
+          snprintf(thr_ack, sizeof(thr_ack), "ACK:HOMETHR:%u\r\n", thrs);
+          Telemetry_SendAck(thr_ack);
+        }
+        break;
+
+      case CMD_SET_HOMESPEED:
+        {
+          uint32_t speed = (uint32_t)Telemetry_GetCommandParam();
+          Motor_SetHomingSpeedUs(speed);
+          char spd_ack[64];
+          snprintf(spd_ack, sizeof(spd_ack), "ACK:HOMESPEED:%lu\r\n", (unsigned long)speed);
+          Telemetry_SendAck(spd_ack);
+        }
+        break;
+
+      case CMD_SET_HOMECURR:
+        {
+          uint16_t curr = (uint16_t)Telemetry_GetCommandParam();
+          Motor_SetHomingCurrentMa(curr);
+          char curr_ack[64];
+          snprintf(curr_ack, sizeof(curr_ack), "ACK:HOMECURR:%u\r\n", curr);
+          Telemetry_SendAck(curr_ack);
+        }
+        break;
+
+      case CMD_DFU:
+        {
+          Telemetry_SendAck("ACK:DFU:REBOOTING_TO_BOOTLOADER\r\n");
+          HAL_Delay(100);
+          extern USBD_HandleTypeDef hUsbDeviceFS;
+          USBD_Stop(&hUsbDeviceFS);
+          USBD_DeInit(&hUsbDeviceFS);
+          HAL_Delay(50);
+          HAL_RCC_DeInit();
+          SysTick->CTRL = 0;
+          SysTick->LOAD = 0;
+          SysTick->VAL = 0;
+          __disable_irq();
+          __HAL_RCC_SYSCFG_CLK_ENABLE();
+          SYSCFG->MEMRMP = 0x01;
+          uint32_t JumpAddress = *(__IO uint32_t*)(0x1FFF0004);
+          void (*SysMemBootJump)(void) = (void (*)(void))JumpAddress;
+          __set_MSP(*(__IO uint32_t*)0x1FFF0000);
+          SysMemBootJump();
+          while(1);
         }
         break;
 
@@ -204,6 +309,9 @@ int main(void)
 
       /* Update Series Elastic Actuator dynamic brake controller (100 Hz, dt = 0.010 s) */
       Motor_UpdateControl(current_force, Encoder_GetVelocityDegS(), 0.010f);
+
+      /* Update MAX30102 pulse oximeter acquisition */
+      SpO2_Update();
 
       /* Heartbeat LED: toggle every 500ms to indicate healthy execution */
       static uint32_t s_led_tick = 0;
@@ -276,33 +384,7 @@ void SystemClock_Config(void)
   }
 }
 
-/**
-  * @brief USART2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-  /* USER CODE BEGIN USART2_Init 0 */
-  /* USER CODE END USART2_Init 0 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART2_Init 2 */
-  /* USER CODE END USART2_Init 2 */
-}
 
 /* USER CODE BEGIN 4 */
 /* USER CODE END 4 */

@@ -20,9 +20,12 @@ extern "C" {
 
 /* Public Function Prototypes */
 void  SpO2_Init(void);
+void  SpO2_Update(void);
 float SpO2_ReadPercent(void);
 float SpO2_ReadHeartRateBpm(void);
 bool  SpO2_IsFingerDetected(void);
+bool  SpO2_IsOnline(void);
+void  SpO2_Diagnose(char *out_buf, size_t max_len);
 
 #ifdef __cplusplus
 }

@@ -53,6 +53,8 @@ class STM32EncoderInterface:
         self.ser = None
         self.is_connected = False
         self.is_streaming = False
+        self.auto_reconnect = True
+        self._last_reconnect_attempt = 0.0
 
         self.rx_buffer = bytearray()
 
@@ -103,6 +105,9 @@ class STM32EncoderInterface:
             self.ser.reset_input_buffer()
             # Send STOP to ensure it starts in IDLE
             self.send_command("STOP")
+            time.sleep(0.02)
+            # Ensure 1.3 A driver current limit is configured over UART to TMC2209
+            self.set_driver_current(1.3)
             return True, f"Connected to {target_port}"
         except Exception as e:
             self.is_connected = False
@@ -110,13 +115,17 @@ class STM32EncoderInterface:
             return False, f"Connection failed: {e}"
 
     def disconnect(self):
-        """Close serial connection."""
-        if self.ser and self.ser.is_open:
+        """Close serial connection and reset interface state."""
+        if self.ser:
             try:
-                self.send_command("STOP")
+                if self.ser.is_open:
+                    self.send_command("STOP")
             except Exception:
                 pass
-            self.ser.close()
+            try:
+                self.ser.close()
+            except Exception:
+                pass
         self.ser = None
         self.is_connected = False
         self.is_streaming = False
@@ -146,6 +155,21 @@ class STM32EncoderInterface:
         if not self.is_connected:
             return False
         return self.send_command(f"RES {float(resistance_lbs):.2f}")
+
+    def set_driver_current(self, current_a: float = 1.3) -> bool:
+        """
+        Configure TMC2209 coil current limit over UART (e.g. 1.3 A).
+
+        Parameters:
+            current_a (float): Current limit in Amperes (e.g. 1.3) or mA (1300).
+
+        Returns:
+            bool: True if transmitted successfully.
+        """
+        if not self.is_connected:
+            return False
+        ma = int(current_a * 1000) if current_a < 10.0 else int(current_a)
+        return self.send_command(f"CURR {ma}")
 
     def start_streaming(self, target_resistance: float = None):
         """Zero the encoder, configure resistance, and command the STM32 to begin 50 Hz binary telemetry stream."""
@@ -202,13 +226,37 @@ class STM32EncoderInterface:
             self.last_velocity = 0.0
             self.last_load_cell = 0.0
 
+    def home(self):
+        """Execute forward limit switch search and 5 mm standoff on the STM32."""
+        if not self.is_connected:
+            self.connect()
+        if self.is_connected:
+            return self.send_command("HOME")
+        return False
+
     def read_samples(self):
         """
         Non-blocking read and unpack of all newly arrived 28-byte binary packets.
+        Automatically reconnects if the MCU was reset (NRST) or USB dropped.
         Returns a list of tuples: [(time_ms, ticks, angle_deg, vel_deg_s, load_cell, motor_iq, spo2), ...]
         """
-        if not self.is_connected or not self.ser:
-            return []
+        now = time.time()
+        # If disconnected and auto-reconnect is enabled, probe for newly re-enumerated port
+        if not self.is_connected or not self.ser or not self.ser.is_open:
+            if self.auto_reconnect and (now - self._last_reconnect_attempt > 0.5):
+                self._last_reconnect_attempt = now
+                detected_port = self.find_serial_port()
+                if detected_port:
+                    ok, _ = self.connect(detected_port)
+                    if ok:
+                        # Re-enable streaming so preview & telemetry resume immediately
+                        self.send_command("STOP")
+                        time.sleep(0.01)
+                        self.send_command("START")
+                        self.is_streaming = True
+                        self.rx_buffer.clear()
+            if not self.is_connected or not self.ser:
+                return []
 
         samples = []
         try:
@@ -260,6 +308,8 @@ class STM32EncoderInterface:
                     self.rx_buffer = bytearray(pkt_bytes[1:]) + self.rx_buffer
 
         except Exception:
-            self.is_connected = False
+            # Device reset (NRST) or USB disconnected: cleanly close file descriptor to allow re-enumeration
+            self.disconnect()
+            self._last_reconnect_attempt = time.time()
 
         return samples

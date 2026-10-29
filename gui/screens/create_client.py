@@ -4,10 +4,11 @@ Create Client screen — form for adding a new client.
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QDateEdit, QFrame, QFormLayout, QSpacerItem,
+    QLineEdit, QTextEdit, QDateEdit, QComboBox, QFrame, QFormLayout, QSpacerItem,
     QSizePolicy, QMessageBox, QGraphicsDropShadowEffect,
 )
 from PySide6.QtCore import Signal, Qt, QDate
+from theme import COLORS
 from PySide6.QtGui import QColor
 from theme import COLORS
 
@@ -67,6 +68,22 @@ class CreateClientScreen(QWidget):
         dob_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_primary']};")
         form.addRow(dob_label, self.input_dob)
 
+        # Forearm Length
+        self.input_forearm = QComboBox()
+        self.input_forearm.setMinimumHeight(40)
+        self.input_forearm.setCursor(Qt.PointingHandCursor)
+        for pin_num in range(1, 6):
+            length_in = float(pin_num + 8)
+            cm = length_in * 2.54
+            self.input_forearm.addItem(
+                f"Pin {pin_num} — {length_in:.0f}\" ({cm:.1f} cm)",
+                userData={"pin": pin_num, "inches": length_in}
+            )
+        self.input_forearm.setCurrentIndex(3)  # Default Pin 4 (12 in)
+        forearm_label = QLabel("Forearm Length:")
+        forearm_label.setStyleSheet(f"font-weight: bold; color: {COLORS['text_primary']};")
+        form.addRow(forearm_label, self.input_forearm)
+
         # Notes
         self.input_notes = QTextEdit()
         self.input_notes.setPlaceholderText("Injury description, rehab goals, etc...")
@@ -102,12 +119,18 @@ class CreateClientScreen(QWidget):
 
         dob = self.input_dob.date().toString("MM-dd-yyyy")
         notes = self.input_notes.toPlainText().strip()
+        forearm_data = self.input_forearm.currentData()
+        forearm_pin = forearm_data.get("pin", 4) if isinstance(forearm_data, dict) else 4
+        forearm_length_in = forearm_data.get("inches", 12.0) if isinstance(forearm_data, dict) else 12.0
 
-        client_id = self.db.create_client(name, dob, notes)
+        client_id = self.db.create_client(
+            name, dob, notes, forearm_pin=forearm_pin, forearm_length_in=forearm_length_in
+        )
         self.client_created.emit(client_id)
 
     def reset_form(self):
         """Clear all form fields."""
         self.input_name.clear()
         self.input_dob.setDate(QDate(1990, 1, 1))
+        self.input_forearm.setCurrentIndex(3)
         self.input_notes.clear()
