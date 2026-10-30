@@ -56,11 +56,17 @@ def main():
 
     print(f"Opening {port} at 115200 baud...")
     ser = serial.Serial(port, 115200, timeout=0.1)
-    time.sleep(0.2)
+    ser.dtr = True
+    ser.rts = True
+    time.sleep(0.05)
+    ser.write(b"STOP\r\n")
+    ser.flush()
+    time.sleep(0.05)
     ser.reset_input_buffer()
 
     # Send START
     ser.write(b"START\r\n")
+    ser.flush()
     print("Sent START. Streaming binary packets (Press Ctrl+C to stop)...\n")
     print(f"{'Time (ms)':<10} {'Angle (deg)':<14} {'Velocity (deg/s)':<18} {'Load (lb)':<10} {'Effort':<8} {'SpO2 (%)':<10} {'CRC':<8}")
     print("-" * 84)
@@ -68,9 +74,13 @@ def main():
     buf = bytearray()
     try:
         while True:
-            chunk = ser.read(ser.in_waiting or 1)
-            if chunk:
-                buf.extend(chunk)
+            w = ser.in_waiting
+            if w > 0:
+                chunk = ser.read(w)
+                if chunk:
+                    buf.extend(chunk)
+            else:
+                time.sleep(0.005)
 
             while len(buf) >= 28:
                 idx = buf.find(b"\xAA\x55")
@@ -88,7 +98,7 @@ def main():
                 expected_crc = struct.unpack("<H", pkt[-2:])[0]
                 if compute_crc16(pkt[:-2]) == expected_crc:
                     _, _, t_ms, angle, vel, load, iq, spo2, crc = struct.unpack("<BB I f f f f f H", pkt)
-                    print(f"{t_ms:<10} {angle:<14.2f} {vel:<18.1f} {load:<10.2f} {iq:<8.1f} {spo2:<10.1f} {hex(crc):<8}")
+                    print(f"{t_ms:<10} {angle:<14.2f} {vel:<18.1f} {load:<10.2f} {iq:<8.1f} {spo2:<10.1f} {hex(crc):<8}", flush=True)
                 else:
                     buf.insert(0, pkt[1])
     except KeyboardInterrupt:

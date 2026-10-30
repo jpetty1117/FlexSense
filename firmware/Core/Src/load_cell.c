@@ -12,47 +12,47 @@
 #include <stdio.h>
 
 /* NAU7802 I2C 7-bit address: 0x2A (0x54 write, 0x55 read) */
-#define NAU7802_I2C_ADDR        (0x2A << 1)
+#define NAU7802_I2C_ADDR (0x2A << 1)
 
 /* Register Map */
-#define NAU7802_REG_PU_CTRL     0x00
-#define NAU7802_REG_CTRL1       0x01
-#define NAU7802_REG_CTRL2       0x02
-#define NAU7802_REG_ADCO_B2     0x12
-#define NAU7802_REG_ADCO_B1     0x13
-#define NAU7802_REG_ADCO_B0     0x14
-#define NAU7802_REG_ADC         0x15
-#define NAU7802_REG_PGA         0x1B
-#define NAU7802_REG_PGA_PWR     0x1C
-#define NAU7802_REG_REV_ID      0x1F
+#define NAU7802_REG_PU_CTRL 0x00
+#define NAU7802_REG_CTRL1 0x01
+#define NAU7802_REG_CTRL2 0x02
+#define NAU7802_REG_ADCO_B2 0x12
+#define NAU7802_REG_ADCO_B1 0x13
+#define NAU7802_REG_ADCO_B0 0x14
+#define NAU7802_REG_ADC 0x15
+#define NAU7802_REG_PGA 0x1B
+#define NAU7802_REG_PGA_PWR 0x1C
+#define NAU7802_REG_REV_ID 0x1F
 
 /* PU_CTRL Bit Definitions */
-#define NAU7802_PU_RR           (1U << 0)  /* Register Reset */
-#define NAU7802_PU_PUD          (1U << 1)  /* Power Up Digital */
-#define NAU7802_PU_PUA          (1U << 2)  /* Power Up Analog */
-#define NAU7802_PU_PUR          (1U << 3)  /* Power Up Ready */
-#define NAU7802_PU_CS           (1U << 4)  /* Cycle Start */
-#define NAU7802_PU_CR           (1U << 5)  /* Cycle Ready */
-#define NAU7802_PU_AVDDS        (1U << 7)  /* Internal LDO Enable */
+#define NAU7802_PU_RR (1U << 0)    /* Register Reset */
+#define NAU7802_PU_PUD (1U << 1)   /* Power Up Digital */
+#define NAU7802_PU_PUA (1U << 2)   /* Power Up Analog */
+#define NAU7802_PU_PUR (1U << 3)   /* Power Up Ready */
+#define NAU7802_PU_CS (1U << 4)    /* Cycle Start */
+#define NAU7802_PU_CR (1U << 5)    /* Cycle Ready */
+#define NAU7802_PU_AVDDS (1U << 7) /* Internal LDO Enable */
 
 /* CTRL2 Bit Definitions */
-#define NAU7802_CTRL2_CALS      (1U << 2)  /* Calibration Start */
+#define NAU7802_CTRL2_CALS (1U << 2) /* Calibration Start */
 
 /* Operational Timeouts */
-#define NAU7802_I2C_TIMEOUT_MS  5
-#define NAU7802_PUR_TIMEOUT_MS  200
-#define NAU7802_CAL_TIMEOUT_MS  400
-#define NAU7802_MAX_FAIL_COUNT  100
+#define NAU7802_I2C_TIMEOUT_MS 5
+#define NAU7802_PUR_TIMEOUT_MS 200
+#define NAU7802_CAL_TIMEOUT_MS 400
+#define NAU7802_MAX_FAIL_COUNT 100
 
 /* Private Module Variables */
-static bool     s_is_ready   = false;
-static int32_t  s_last_raw   = 0;
-static int32_t  s_tare_raw   = 0;
+static bool s_is_ready = false;
+static int32_t s_last_raw = 0;
+static int32_t s_tare_raw = 0;
 static uint32_t s_fail_count = 0;
-static uint8_t  s_init_step  = 0;
+static uint8_t s_init_step = 0;
 
-/* Calibrated conversion scale factor: 42297 counts per lb */
-static float    s_cal_scale  = (1.0f / 42296.7f);
+/* Calibrated conversion scale factor: 106973 counts per lb (6.1 lb calibration) */
+static float s_cal_scale = (1.0f / 106972.5f);
 
 /* Internal Helper Prototypes */
 static bool nau7802_write_reg(uint8_t reg, uint8_t val);
@@ -69,11 +69,11 @@ static bool nau7802_clear_bit(uint8_t reg, uint8_t bit_mask);
 ** Notes:
 **   None
 */
-static bool nau7802_write_reg(uint8_t reg, uint8_t val)
-{
+static bool nau7802_write_reg(uint8_t reg, uint8_t val) {
   HAL_StatusTypeDef status;
-  status = HAL_I2C_Mem_Write(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, (uint16_t)reg,
-                             I2C_MEMADD_SIZE_8BIT, &val, 1, NAU7802_I2C_TIMEOUT_MS);
+  status =
+      HAL_I2C_Mem_Write(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, (uint16_t)reg,
+                        I2C_MEMADD_SIZE_8BIT, &val, 1, NAU7802_I2C_TIMEOUT_MS);
   return (status == HAL_OK);
 } /* nau7802_write_reg() */
 
@@ -86,11 +86,11 @@ static bool nau7802_write_reg(uint8_t reg, uint8_t val)
 ** Notes:
 **   None
 */
-static bool nau7802_read_reg(uint8_t reg, uint8_t *val)
-{
+static bool nau7802_read_reg(uint8_t reg, uint8_t *val) {
   HAL_StatusTypeDef status;
-  status = HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, (uint16_t)reg,
-                            I2C_MEMADD_SIZE_8BIT, val, 1, NAU7802_I2C_TIMEOUT_MS);
+  status =
+      HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, (uint16_t)reg,
+                       I2C_MEMADD_SIZE_8BIT, val, 1, NAU7802_I2C_TIMEOUT_MS);
   return (status == HAL_OK);
 } /* nau7802_read_reg() */
 
@@ -103,11 +103,9 @@ static bool nau7802_read_reg(uint8_t reg, uint8_t *val)
 ** Notes:
 **   None
 */
-static bool nau7802_set_bit(uint8_t reg, uint8_t bit_mask)
-{
+static bool nau7802_set_bit(uint8_t reg, uint8_t bit_mask) {
   uint8_t val = 0;
-  if ( !nau7802_read_reg(reg, &val) )
-  {
+  if (!nau7802_read_reg(reg, &val)) {
     return false;
   }
   val |= bit_mask;
@@ -123,14 +121,12 @@ static bool nau7802_set_bit(uint8_t reg, uint8_t bit_mask)
 ** Notes:
 **   None
 */
-static bool nau7802_clear_bit(uint8_t reg, uint8_t bit_mask)
-{
+static bool nau7802_clear_bit(uint8_t reg, uint8_t bit_mask) {
   uint8_t val = 0;
-  if ( !nau7802_read_reg(reg, &val) )
-  {
+  if (!nau7802_read_reg(reg, &val)) {
     return false;
   }
-  val &= (uint8_t)( ~bit_mask );
+  val &= (uint8_t)(~bit_mask);
   return nau7802_write_reg(reg, val);
 } /* nau7802_clear_bit() */
 
@@ -142,8 +138,7 @@ static bool nau7802_clear_bit(uint8_t reg, uint8_t bit_mask)
 ** Notes:
 **   Follows NAU7802 power-on and calibration sequence
 */
-void LoadCell_Init(void)
-{
+void LoadCell_Init(void) {
   s_is_ready = false;
   s_last_raw = 0;
   s_tare_raw = 0;
@@ -153,18 +148,16 @@ void LoadCell_Init(void)
   /* 1. Probe NAU7802: Check if device ACKs at 0x2A via PU_CTRL read */
   uint8_t pu_val = 0;
   bool probed = false;
-  for ( int retry = 0; retry < 5; retry++ )
-  {
-    if ( HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, NAU7802_REG_PU_CTRL,
-                          I2C_MEMADD_SIZE_8BIT, &pu_val, 1, 10) == HAL_OK )
-    {
+  for (int retry = 0; retry < 5; retry++) {
+    if (HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR,
+                         NAU7802_REG_PU_CTRL, I2C_MEMADD_SIZE_8BIT, &pu_val, 1,
+                         10) == HAL_OK) {
       probed = true;
       break;
     }
     HAL_Delay(20);
   }
-  if ( !probed )
-  {
+  if (!probed) {
     s_is_ready = false;
     s_init_step = 1;
     return;
@@ -176,9 +169,11 @@ void LoadCell_Init(void)
   nau7802_clear_bit(NAU7802_REG_PU_CTRL, NAU7802_PU_RR);
   HAL_Delay(10);
 
-  /* 3. Power Up Digital and Analog sections, and enable internal LDO (AVDDS = 1) */
-  if ( !nau7802_write_reg(NAU7802_REG_PU_CTRL, (uint8_t)(NAU7802_PU_PUD | NAU7802_PU_PUA | NAU7802_PU_AVDDS)) )
-  {
+  /* 3. Power Up Digital and Analog sections, and enable internal LDO (AVDDS =
+   * 1) */
+  if (!nau7802_write_reg(
+          NAU7802_REG_PU_CTRL,
+          (uint8_t)(NAU7802_PU_PUD | NAU7802_PU_PUA | NAU7802_PU_AVDDS))) {
     s_is_ready = false;
     s_init_step = 3;
     return;
@@ -188,18 +183,15 @@ void LoadCell_Init(void)
   uint32_t start_tick = HAL_GetTick();
   uint8_t pu_status = 0;
   bool pur_ok = false;
-  while ( (HAL_GetTick() - start_tick) < NAU7802_PUR_TIMEOUT_MS )
-  {
-    if ( nau7802_read_reg(NAU7802_REG_PU_CTRL, &pu_status) &&
-         ((pu_status & NAU7802_PU_PUR) != 0) )
-    {
+  while ((HAL_GetTick() - start_tick) < NAU7802_PUR_TIMEOUT_MS) {
+    if (nau7802_read_reg(NAU7802_REG_PU_CTRL, &pu_status) &&
+        ((pu_status & NAU7802_PU_PUR) != 0)) {
       pur_ok = true;
       break;
     }
     HAL_Delay(5);
   }
-  if ( !pur_ok )
-  {
+  if (!pur_ok) {
     s_is_ready = false;
     s_init_step = 4;
     return;
@@ -213,8 +205,7 @@ void LoadCell_Init(void)
 
   /* 7. Turn off CLK_CHP */
   uint8_t adc_reg = 0;
-  if ( nau7802_read_reg(NAU7802_REG_ADC, &adc_reg) )
-  {
+  if (nau7802_read_reg(NAU7802_REG_ADC, &adc_reg)) {
     nau7802_write_reg(NAU7802_REG_ADC, (uint8_t)(adc_reg | 0x30));
   }
 
@@ -230,13 +221,10 @@ void LoadCell_Init(void)
   /* 11. Perform AFE calibration with 400ms timeout */
   nau7802_set_bit(NAU7802_REG_CTRL2, NAU7802_CTRL2_CALS);
   start_tick = HAL_GetTick();
-  while ( (HAL_GetTick() - start_tick) < NAU7802_CAL_TIMEOUT_MS )
-  {
+  while ((HAL_GetTick() - start_tick) < NAU7802_CAL_TIMEOUT_MS) {
     uint8_t ctrl2 = 0;
-    if ( nau7802_read_reg(NAU7802_REG_CTRL2, &ctrl2) )
-    {
-      if ( (ctrl2 & NAU7802_CTRL2_CALS) == 0 )
-      {
+    if (nau7802_read_reg(NAU7802_REG_CTRL2, &ctrl2)) {
+      if ((ctrl2 & NAU7802_CTRL2_CALS) == 0) {
         break;
       }
     }
@@ -249,12 +237,11 @@ void LoadCell_Init(void)
   /* Flush and capture baseline reading for tare */
   HAL_Delay(50);
   uint8_t buf[3];
-  if ( HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, NAU7802_REG_ADCO_B2,
-                        I2C_MEMADD_SIZE_8BIT, buf, 3, 10) == HAL_OK )
-  {
-    int32_t raw = ((int32_t)buf[0] << 16) | ((int32_t)buf[1] << 8) | ((int32_t)buf[2]);
-    if ( (raw & 0x00800000) != 0 )
-    {
+  if (HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, NAU7802_REG_ADCO_B2,
+                       I2C_MEMADD_SIZE_8BIT, buf, 3, 10) == HAL_OK) {
+    int32_t raw =
+        ((int32_t)buf[0] << 16) | ((int32_t)buf[1] << 8) | ((int32_t)buf[2]);
+    if ((raw & 0x00800000) != 0) {
       raw |= 0xFF000000;
     }
     s_last_raw = raw;
@@ -273,15 +260,12 @@ void LoadCell_Init(void)
 ** Notes:
 **   Non-blocking (<= 5ms) to preserve 100 Hz loop timing
 */
-float LoadCell_ReadForceLbs(void)
-{
-  if ( !s_is_ready )
-  {
+float LoadCell_ReadForceLbs(void) {
+  if (!s_is_ready) {
     /* Attempt auto-recovery periodically (every 2.0s) if disconnected */
     static uint32_t s_reinit_tick = 0;
     uint32_t now = HAL_GetTick();
-    if ( (now - s_reinit_tick) >= 2000 )
-    {
+    if ((now - s_reinit_tick) >= 2000) {
       s_reinit_tick = now;
       MX_I2C1_Init();
       LoadCell_Init();
@@ -291,30 +275,26 @@ float LoadCell_ReadForceLbs(void)
 
   /* Read PU_CTRL to check if conversion is ready */
   uint8_t pu_ctrl = 0;
-  if ( HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, NAU7802_REG_PU_CTRL,
-                        I2C_MEMADD_SIZE_8BIT, &pu_ctrl, 1, NAU7802_I2C_TIMEOUT_MS) == HAL_OK )
-  {
+  if (HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, NAU7802_REG_PU_CTRL,
+                       I2C_MEMADD_SIZE_8BIT, &pu_ctrl, 1,
+                       NAU7802_I2C_TIMEOUT_MS) == HAL_OK) {
     s_fail_count = 0;
-    if ( (pu_ctrl & NAU7802_PU_CR) != 0 )
-    {
+    if ((pu_ctrl & NAU7802_PU_CR) != 0) {
       uint8_t buf[3];
-      if ( HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, NAU7802_REG_ADCO_B2,
-                            I2C_MEMADD_SIZE_8BIT, buf, 3, NAU7802_I2C_TIMEOUT_MS) == HAL_OK )
-      {
-        int32_t raw = ((int32_t)buf[0] << 16) | ((int32_t)buf[1] << 8) | ((int32_t)buf[2]);
-        if ( (raw & 0x00800000) != 0 )
-        {
+      if (HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR,
+                           NAU7802_REG_ADCO_B2, I2C_MEMADD_SIZE_8BIT, buf, 3,
+                           NAU7802_I2C_TIMEOUT_MS) == HAL_OK) {
+        int32_t raw = ((int32_t)buf[0] << 16) | ((int32_t)buf[1] << 8) |
+                      ((int32_t)buf[2]);
+        if ((raw & 0x00800000) != 0) {
           raw |= 0xFF000000;
         }
         s_last_raw = raw;
       }
     }
-  }
-  else
-  {
+  } else {
     s_fail_count++;
-    if ( s_fail_count > NAU7802_MAX_FAIL_COUNT )
-    {
+    if (s_fail_count > NAU7802_MAX_FAIL_COUNT) {
       s_is_ready = false;
     }
   }
@@ -330,10 +310,7 @@ float LoadCell_ReadForceLbs(void)
 ** Notes:
 **   None
 */
-void LoadCell_Tare(void)
-{
-  s_tare_raw = s_last_raw;
-} /* LoadCell_Tare() */
+void LoadCell_Tare(void) { s_tare_raw = s_last_raw; } /* LoadCell_Tare() */
 
 /* Check if load cell peripheral is initialized and communicating
 ** Parameters:
@@ -343,8 +320,7 @@ void LoadCell_Tare(void)
 ** Notes:
 **   None
 */
-bool LoadCell_IsConnected(void)
-{
+bool LoadCell_IsConnected(void) {
   return s_is_ready;
 } /* LoadCell_IsConnected() */
 
@@ -356,8 +332,7 @@ bool LoadCell_IsConnected(void)
 ** Notes:
 **   None
 */
-uint8_t LoadCell_GetInitStep(void)
-{
+uint8_t LoadCell_GetInitStep(void) {
   return s_init_step;
 } /* LoadCell_GetInitStep() */
 
@@ -369,8 +344,7 @@ uint8_t LoadCell_GetInitStep(void)
 ** Notes:
 **   None
 */
-int32_t LoadCell_GetRawCount(void)
-{
+int32_t LoadCell_GetRawCount(void) {
   return s_last_raw;
 } /* LoadCell_GetRawCount() */
 
@@ -382,8 +356,7 @@ int32_t LoadCell_GetRawCount(void)
 ** Notes:
 **   None
 */
-void LoadCell_SetCalibrationScale(float lbs_per_count)
-{
+void LoadCell_SetCalibrationScale(float lbs_per_count) {
   s_cal_scale = lbs_per_count;
 } /* LoadCell_SetCalibrationScale() */
 
@@ -395,8 +368,7 @@ void LoadCell_SetCalibrationScale(float lbs_per_count)
 ** Notes:
 **   None
 */
-float LoadCell_GetCalibrationScale(void)
-{
+float LoadCell_GetCalibrationScale(void) {
   return s_cal_scale;
 } /* LoadCell_GetCalibrationScale() */
 
@@ -409,8 +381,7 @@ float LoadCell_GetCalibrationScale(void)
 ** Notes:
 **   None
 */
-void LoadCell_Diagnose(char *out_buf, size_t max_len)
-{
+void LoadCell_Diagnose(char *out_buf, size_t max_len) {
   /* 1. Read raw GPIO input states on PB6 (SCL) and PB7 (SDA) */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -425,15 +396,14 @@ void LoadCell_Diagnose(char *out_buf, size_t max_len)
   MX_I2C1_Init();
 
   /* 3. Probe device ready on NAU7802 address */
-  HAL_StatusTypeDef rdy_st = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, 2, 10);
+  HAL_StatusTypeDef rdy_st =
+      HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, 2, 10);
   uint32_t i2c_err = hi2c1.ErrorCode;
 
   /* 4. Scan all 127 addresses to find any responding device on bus */
   int found_addr = 0;
-  for ( int a = 1; a < 128; a++ )
-  {
-    if ( HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK )
-    {
+  for (int a = 1; a < 128; a++) {
+    if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK) {
       found_addr = a;
       break;
     }
