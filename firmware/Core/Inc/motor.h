@@ -37,6 +37,8 @@ extern "C" {
 #define FORCE_GATE_LBS              0.50f     /* lbf minimum patient applied load */
 #define INTEGRAL_MAX_TRIM_MM        3.0f      /* mm maximum feedback trim */
 #define MAX_SLEW_VELOCITY_MM_S      25.0f     /* mm/s maximum linear speed */
+#define MAX_ACCELERATION_MM_S2      200.0f    /* mm/s^2 smooth trapezoidal acceleration ramp */
+#define MIN_SLEW_VELOCITY_MM_S      0.5f      /* mm/s minimum crawling speed */
 
 /* Stepper Motor & Lead Screw Mechanical Geometry */
 #define MOTOR_FULL_STEPS_PER_REV    200.0f    /* 1.8 deg per full step */
@@ -79,6 +81,7 @@ void     Motor_SetResistanceLbs(float resistance_lbs);
 float    Motor_GetTargetResistanceLbs(void);
 float    Motor_GetCommandedPositionMm(void);
 float    Motor_GetCurrentPositionMm(void);
+float    Motor_GetCurrentVelocityMmS(void);
 float    Motor_GetIqCurrent(void);
 void     Motor_EmergencyStop(void);
 bool     Motor_IsEnabled(void);

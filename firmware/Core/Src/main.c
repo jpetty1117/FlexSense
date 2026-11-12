@@ -60,10 +60,14 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 /* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
+/* The application entry point
+** Parameters:
+**   None
+** Return:
+**   int: Process exit code
+** Notes:
+**   Initializes hardware subsystems and executes real-time scheduler superloop
+*/
 int main(void)
 {
   /* USER CODE BEGIN 1 */
@@ -202,8 +206,14 @@ int main(void)
       case CMD_SET_CURRENT:
         {
           uint16_t current_ma = (uint16_t)Telemetry_GetCommandParam();
-          if ( current_ma < 100 ) current_ma = 100;
-          if ( current_ma > 2000 ) current_ma = 2000;
+          if ( current_ma < 100 )
+          {
+            current_ma = 100;
+          }
+          else if ( current_ma > 2000 )
+          {
+            current_ma = 2000;
+          }
           bool ok = Motor_SetDriverCurrent(current_ma, 50);
           char curr_ack[64];
           snprintf(curr_ack, sizeof(curr_ack), "ACK:CURR:%u_MA:%s\r\n", current_ma, ok ? "OK" : "ERR");
@@ -282,14 +292,17 @@ int main(void)
           void (*SysMemBootJump)(void) = (void (*)(void))JumpAddress;
           __set_MSP(*(__IO uint32_t*)0x1FFF0000);
           SysMemBootJump();
-          while(1);
+          while ( 1 )
+          {
+            __NOP();
+          }
         }
         break;
 
       case CMD_NONE:
       default:
         break;
-    }
+    } /* switch ( cmd ) */
 
     /* 2. Run non-blocking stepper pulse engine (checked on every loop iteration) */
     Motor_StepTask();
@@ -310,8 +323,13 @@ int main(void)
       /* Update Series Elastic Actuator dynamic brake controller (100 Hz, dt = 0.010 s) */
       Motor_UpdateControl(current_force, Encoder_GetVelocityDegS(), 0.010f);
 
-      /* Update MAX30102 pulse oximeter acquisition */
-      SpO2_Update();
+      /* Update MAX30102 pulse oximeter acquisition at 20 Hz (every 50 ms) to avoid blocking 100 Hz loop */
+      static uint32_t s_spo2_tick = 0;
+      if ( (now - s_spo2_tick) >= 50 )
+      {
+        s_spo2_tick = now;
+        SpO2_Update();
+      }
 
       /* Heartbeat LED: toggle every 500ms to indicate healthy execution */
       static uint32_t s_led_tick = 0;
@@ -335,14 +353,18 @@ int main(void)
         Telemetry_SendPacket(&pkt);
       }
     }
-  }
+  } /* while ( 1 ) */
   /* USER CODE END 3 */
-}
+} /* main() */
 
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+/* System Clock Configuration
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Initializes CPU, AHB, APB buses and HSE/PLL clocks
+*/
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -382,26 +404,28 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-}
-
-
+} /* SystemClock_Config() */
 
 /* USER CODE BEGIN 4 */
 /* USER CODE END 4 */
 
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+/* System critical error handler
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Disables interrupts and enters terminal spinlock
+*/
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   __disable_irq();
-  while (1)
+  while ( 1 )
   {
   }
   /* USER CODE END Error_Handler_Debug */
-}
+} /* Error_Handler() */
 
 #ifdef  USE_FULL_ASSERT
 /**

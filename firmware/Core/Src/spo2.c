@@ -71,7 +71,15 @@ static bool max30102_write_reg(uint8_t reg, uint8_t val);
 static bool max30102_read_reg(uint8_t reg, uint8_t *val);
 static bool max30102_read_bytes(uint8_t reg, uint8_t *buf, uint16_t len);
 
-/* Write single byte to MAX30102 register using standard I2C memory write */
+/* Write single byte to MAX30102 register using standard I2C memory write
+** Parameters:
+**   reg - 8-bit register address
+**   val - 8-bit data value to write
+** Return:
+**   bool: True on success, False on error
+** Notes:
+**   None
+*/
 static bool max30102_write_reg(uint8_t reg, uint8_t val)
 {
   if ( s_hi2c == (I2C_HandleTypeDef *)0 )
@@ -80,9 +88,17 @@ static bool max30102_write_reg(uint8_t reg, uint8_t val)
   }
   return (HAL_I2C_Mem_Write(s_hi2c, (uint16_t)MAX30102_I2C_ADDR, (uint16_t)reg,
                             I2C_MEMADD_SIZE_8BIT, &val, 1, SPO2_I2C_TIMEOUT_MS) == HAL_OK);
-}
+} /* max30102_write_reg() */
 
-/* Read single byte from MAX30102 register with Repeated START */
+/* Read single byte from MAX30102 register with Repeated START
+** Parameters:
+**   reg - 8-bit register address
+**   val - Pointer to destination byte
+** Return:
+**   bool: True on success, False on error
+** Notes:
+**   None
+*/
 static bool max30102_read_reg(uint8_t reg, uint8_t *val)
 {
   if ( (s_hi2c == (I2C_HandleTypeDef *)0) || (val == (uint8_t *)0) )
@@ -91,9 +107,18 @@ static bool max30102_read_reg(uint8_t reg, uint8_t *val)
   }
   return (HAL_I2C_Mem_Read(s_hi2c, (uint16_t)MAX30102_I2C_ADDR, (uint16_t)reg,
                            I2C_MEMADD_SIZE_8BIT, val, 1, SPO2_I2C_TIMEOUT_MS) == HAL_OK);
-}
+} /* max30102_read_reg() */
 
-/* Read multiple sequential bytes from MAX30102 with Repeated START */
+/* Read multiple sequential bytes from MAX30102 with Repeated START
+** Parameters:
+**   reg - 8-bit starting register address
+**   buf - Pointer to destination buffer
+**   len - Number of bytes to read
+** Return:
+**   bool: True on success, False on error
+** Notes:
+**   None
+*/
 static bool max30102_read_bytes(uint8_t reg, uint8_t *buf, uint16_t len)
 {
   if ( (s_hi2c == (I2C_HandleTypeDef *)0) || (buf == (uint8_t *)0) )
@@ -102,10 +127,15 @@ static bool max30102_read_bytes(uint8_t reg, uint8_t *buf, uint16_t len)
   }
   return (HAL_I2C_Mem_Read(s_hi2c, (uint16_t)MAX30102_I2C_ADDR, (uint16_t)reg,
                            I2C_MEMADD_SIZE_8BIT, buf, len, SPO2_I2C_TIMEOUT_MS) == HAL_OK);
-}
+} /* max30102_read_bytes() */
 
 /* Probe and initialize MAX30102 sensor
-** Automatically checks I2C3 (PA8/PB4) first, then I2C1 (PB6/PB7)
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Automatically checks I2C3 (PA8/PB4) first, then I2C1 (PB6/PB7)
 */
 void SpO2_Init(void)
 {
@@ -188,18 +218,25 @@ void SpO2_Init(void)
   s_is_online = true;
 } /* SpO2_Init() */
 
-/* Periodic sensor polling called at 100 Hz */
+/* Periodic sensor polling and vitals estimation
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Executed periodically (20 Hz)
+*/
 void SpO2_Update(void)
 {
-  if ( !s_is_online || (s_hi2c == (I2C_HandleTypeDef *)0) )
+  if ( (!s_is_online) || (s_hi2c == (I2C_HandleTypeDef *)0) )
   {
     return;
   }
 
   uint8_t wr_ptr = 0;
   uint8_t rd_ptr = 0;
-  if ( !max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr_ptr) ||
-       !max30102_read_reg(MAX30102_REG_FIFO_RD_PTR, &rd_ptr) )
+  if ( (!max30102_read_reg(MAX30102_REG_FIFO_WR_PTR, &wr_ptr)) ||
+       (!max30102_read_reg(MAX30102_REG_FIFO_RD_PTR, &rd_ptr)) )
   {
     return;
   }
@@ -230,75 +267,121 @@ void SpO2_Update(void)
   /* Finger presence detection */
   s_finger_present = (s_raw_ir > FINGER_THRESHOLD_IR);
 
-      if ( s_finger_present )
+  if ( s_finger_present )
+  {
+    /* Exponential filter tracking DC baseline */
+    if ( s_dc_red < 1.0f )
+    {
+      s_dc_red = (float)s_raw_red;
+      s_dc_ir  = (float)s_raw_ir;
+    }
+    else
+    {
+      s_dc_red += 0.05f * ((float)s_raw_red - s_dc_red);
+      s_dc_ir  += 0.05f * ((float)s_raw_ir  - s_dc_ir);
+    }
+
+    float ac_red = fabsf((float)s_raw_red - s_dc_red);
+    float ac_ir  = fabsf((float)s_raw_ir  - s_dc_ir);
+
+    s_ac_red_peak += 0.1f * (ac_red - s_ac_red_peak);
+    s_ac_ir_peak  += 0.1f * (ac_ir  - s_ac_ir_peak);
+
+    /* Ratio of ratios calculation */
+    if ( (s_dc_red > 100.0f) && (s_dc_ir > 100.0f) && (s_ac_ir_peak > 10.0f) )
+    {
+      float ratio = (s_ac_red_peak / s_dc_red) / (s_ac_ir_peak / s_dc_ir);
+      float spo2_est = 110.0f - (25.0f * ratio);
+      if ( spo2_est > 100.0f )
       {
-        /* Exponential filter tracking DC baseline */
-        if ( s_dc_red < 1.0f )
-        {
-          s_dc_red = (float)s_raw_red;
-          s_dc_ir  = (float)s_raw_ir;
-        }
-        else
-        {
-          s_dc_red += 0.05f * ((float)s_raw_red - s_dc_red);
-          s_dc_ir  += 0.05f * ((float)s_raw_ir  - s_dc_ir);
-        }
+        spo2_est = 100.0f;
+      }
+      else if ( spo2_est < 85.0f )
+      {
+        spo2_est = 85.0f;
+      }
 
-        float ac_red = fabsf((float)s_raw_red - s_dc_red);
-        float ac_ir  = fabsf((float)s_raw_ir  - s_dc_ir);
-
-        s_ac_red_peak += 0.1f * (ac_red - s_ac_red_peak);
-        s_ac_ir_peak  += 0.1f * (ac_ir  - s_ac_ir_peak);
-
-        /* Ratio of ratios calculation */
-        if ( (s_dc_red > 100.0f) && (s_dc_ir > 100.0f) && (s_ac_ir_peak > 10.0f) )
-        {
-          float ratio = (s_ac_red_peak / s_dc_red) / (s_ac_ir_peak / s_dc_ir);
-          float spo2_est = 110.0f - (25.0f * ratio);
-          if ( spo2_est > 100.0f ) spo2_est = 100.0f;
-          if ( spo2_est < 85.0f )  spo2_est = 85.0f;
-
-          if ( s_last_spo2_pct < 1.0f )
-          {
-            s_last_spo2_pct = spo2_est;
-          }
-          else
-          {
-            s_last_spo2_pct += 0.05f * (spo2_est - s_last_spo2_pct);
-          }
-          s_last_hr_bpm = 74.0f; /* Nominal stabilized heart rate indicator */
-        }
+      if ( s_last_spo2_pct < 1.0f )
+      {
+        s_last_spo2_pct = spo2_est;
       }
       else
       {
-        s_last_spo2_pct = 0.0f;
-        s_last_hr_bpm   = 0.0f;
-        s_dc_red        = 0.0f;
-        s_dc_ir         = 0.0f;
+        s_last_spo2_pct += 0.05f * (spo2_est - s_last_spo2_pct);
       }
+      s_last_hr_bpm = 74.0f; /* Nominal stabilized heart rate indicator */
+    }
+  }
+  else
+  {
+    s_last_spo2_pct = 0.0f;
+    s_last_hr_bpm   = 0.0f;
+    s_dc_red        = 0.0f;
+    s_dc_ir         = 0.0f;
+  }
 } /* SpO2_Update() */
 
+/* Read latest estimated SpO2 percentage
+** Parameters:
+**   None
+** Return:
+**   float: Blood oxygen saturation percentage
+** Notes:
+**   None
+*/
 float SpO2_ReadPercent(void)
 {
   return s_last_spo2_pct;
-}
+} /* SpO2_ReadPercent() */
 
+/* Read latest estimated heart rate in beats per minute
+** Parameters:
+**   None
+** Return:
+**   float: Heart rate in BPM
+** Notes:
+**   None
+*/
 float SpO2_ReadHeartRateBpm(void)
 {
   return s_last_hr_bpm;
-}
+} /* SpO2_ReadHeartRateBpm() */
 
+/* Query if finger is currently placed on sensor aperture
+** Parameters:
+**   None
+** Return:
+**   bool: True if IR reflection indicates finger contact
+** Notes:
+**   None
+*/
 bool SpO2_IsFingerDetected(void)
 {
   return s_finger_present;
-}
+} /* SpO2_IsFingerDetected() */
 
+/* Query if MAX30102 pulse oximeter is detected and online
+** Parameters:
+**   None
+** Return:
+**   bool: True if sensor acknowledged
+** Notes:
+**   None
+*/
 bool SpO2_IsOnline(void)
 {
   return s_is_online;
-}
+} /* SpO2_IsOnline() */
 
-/* Comprehensive I2C bus diagnosis and sensor detection report */
+/* Comprehensive I2C bus diagnosis and sensor detection report
+** Parameters:
+**   out_buf - Output string buffer
+**   max_len - Maximum buffer capacity
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void SpO2_Diagnose(char *out_buf, size_t max_len)
 {
   /* If not online, attempt re-probe */

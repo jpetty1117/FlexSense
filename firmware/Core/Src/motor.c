@@ -23,10 +23,13 @@ static float            s_feedforward_pos_mm    = 0.0f;
 static float            s_commanded_pos_mm      = 0.0f;
 static float            s_profiled_pos_mm       = 0.0f;
 static float            s_current_pos_mm        = 0.0f;
+static float            s_current_vel_mm_s      = 0.0f;
+static float            s_filt_force_lbs        = 0.0f;
 
 static int32_t          s_target_step           = 0;
 static int32_t          s_current_step          = 0;
 static uint32_t         s_last_step_cycle       = 0;
+static uint32_t         s_step_interval_cycles  = 0;
 
 static float            s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 static bool             s_motor_enabled         = false;
@@ -109,9 +112,12 @@ void Motor_Init(void)
   s_commanded_pos_mm      = 0.0f;
   s_profiled_pos_mm       = 0.0f;
   s_current_pos_mm        = 0.0f;
+  s_current_vel_mm_s      = 0.0f;
+  s_filt_force_lbs        = 0.0f;
   s_target_step           = 0;
   s_current_step          = 0;
   s_last_step_cycle       = DWT->CYCCNT;
+  s_step_interval_cycles  = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
   s_motor_enabled         = false;
   s_dir_inverted          = false;
   s_steps_per_mm          = MOTOR_STEPS_PER_MM;
@@ -193,6 +199,19 @@ float Motor_GetCurrentPositionMm(void)
   return s_current_pos_mm;
 } /* Motor_GetCurrentPositionMm() */
 
+/* Read current instantaneous profiled carriage velocity in mm/s
+** Parameters:
+**   None
+** Return:
+**   float: Current linear velocity in mm/s
+** Notes:
+**   None
+*/
+float Motor_GetCurrentVelocityMmS(void)
+{
+  return s_current_vel_mm_s;
+} /* Motor_GetCurrentVelocityMmS() */
+
 /* Read instantaneous actuator effort / carriage position for telemetry
 ** Parameters:
 **   None
@@ -220,6 +239,7 @@ void Motor_EmergencyStop(void)
   s_integral              = 0.0f;
   s_commanded_pos_mm      = 0.0f;
   s_profiled_pos_mm       = 0.0f;
+  s_current_vel_mm_s      = 0.0f;
   s_target_step           = s_current_step; /* Freeze pulse generator immediately */
   s_motor_enabled         = false;
 
@@ -288,6 +308,9 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     dt_s = 0.010f;
   }
 
+  /* Low-pass filter load cell force (1st order EMA, fc ~ 10 Hz at 100 Hz dt) to reject ADC noise */
+  s_filt_force_lbs += 0.35f * (measured_force_lbs - s_filt_force_lbs);
+
   /* When resistance is disabled or homed, command carriage to slack home position */
   if ( (!s_motor_enabled) || (s_target_resistance_lbs <= 0.0f) )
   {
@@ -300,8 +323,8 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     /* 1. Feedforward Position Calculation */
     s_feedforward_pos_mm = X_SLACK_MM + (s_target_resistance_lbs / K_PLANT_NOMINAL);
 
-    /* 2. Closed-Loop Force Error */
-    float error = s_target_resistance_lbs - measured_force_lbs;
+    /* 2. Closed-Loop Force Error using filtered load cell reading */
+    float error = s_target_resistance_lbs - s_filt_force_lbs;
 
     /* 3. Deadband Filtering (Rejects chatter and human tremor) */
     float error_eff = 0.0f;
@@ -319,7 +342,7 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
 
     /* 4. Motion Gating */
     bool is_moving = (fabsf(velocity_deg_s) > VELOCITY_GATE_DEG_S);
-    bool is_loaded = (measured_force_lbs > FORCE_GATE_LBS);
+    bool is_loaded = (s_filt_force_lbs > FORCE_GATE_LBS);
 
     if ( is_moving || is_loaded )
     {
@@ -354,35 +377,95 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     }
   }
 
-  /* 7. Velocity Slew Rate Limiter (Protects stepper motor from stalling) */
-  float max_step_delta = MAX_SLEW_VELOCITY_MM_S * dt_s;
-  if ( s_commanded_pos_mm > (s_profiled_pos_mm + max_step_delta) )
+  /* 7. Trapezoidal Acceleration & Deceleration Profiler (Smooth motion ramp) */
+  float pos_err = s_commanded_pos_mm - s_profiled_pos_mm;
+  float desired_vel = 0.0f;
+
+  if ( fabsf(pos_err) > 0.005f )
   {
-    s_profiled_pos_mm += max_step_delta;
-  }
-  else if ( s_commanded_pos_mm < (s_profiled_pos_mm - max_step_delta) )
-  {
-    s_profiled_pos_mm -= max_step_delta;
+    /* Calculate stopping speed: v_max_decel = sqrt(2 * a * d) */
+    float max_reachable_vel = sqrtf(2.0f * MAX_ACCELERATION_MM_S2 * fabsf(pos_err));
+    if ( max_reachable_vel > MAX_SLEW_VELOCITY_MM_S )
+    {
+      max_reachable_vel = MAX_SLEW_VELOCITY_MM_S;
+    }
+    desired_vel = (pos_err > 0.0f) ? max_reachable_vel : -max_reachable_vel;
   }
   else
   {
-    s_profiled_pos_mm = s_commanded_pos_mm;
+    desired_vel = 0.0f;
+  }
+
+  /* Limit acceleration (dv/dt <= MAX_ACCELERATION_MM_S2) */
+  float max_v_step = MAX_ACCELERATION_MM_S2 * dt_s;
+  if ( desired_vel > (s_current_vel_mm_s + max_v_step) )
+  {
+    s_current_vel_mm_s += max_v_step;
+  }
+  else if ( desired_vel < (s_current_vel_mm_s - max_v_step) )
+  {
+    s_current_vel_mm_s -= max_v_step;
+  }
+  else
+  {
+    s_current_vel_mm_s = desired_vel;
+  }
+
+  /* Integrate velocity to advance profiled position */
+  s_profiled_pos_mm += (s_current_vel_mm_s * dt_s);
+
+  /* Clamp within mechanical bounds */
+  if ( s_profiled_pos_mm < 0.0f )
+  {
+    s_profiled_pos_mm = 0.0f;
+    s_current_vel_mm_s = 0.0f;
+  }
+  else if ( s_profiled_pos_mm > X_MAX_TRAVEL_MM )
+  {
+    s_profiled_pos_mm = X_MAX_TRAVEL_MM;
+    s_current_vel_mm_s = 0.0f;
   }
 
   /* 8. Convert Profiled Linear Position to Target Motor Steps */
-  s_target_step = (int32_t)(s_profiled_pos_mm * s_steps_per_mm);
+  s_target_step = (int32_t)lroundf(s_profiled_pos_mm * s_steps_per_mm);
 
-  /* 9. Periodic TMC2209 Health Diagnostics (polled every 100 ms) */
+  /* Dynamically calculate step interval in DWT cycles based on instantaneous velocity */
+  float abs_vel = fabsf(s_current_vel_mm_s);
+  if ( (abs_vel < MIN_SLEW_VELOCITY_MM_S) && (s_current_step != s_target_step) )
+  {
+    abs_vel = MIN_SLEW_VELOCITY_MM_S; /* Smooth settling crawl */
+  }
+
+  if ( abs_vel >= 0.1f )
+  {
+    float step_rate_hz = abs_vel * s_steps_per_mm;
+    uint32_t cycles = (uint32_t)((float)SystemCoreClock / step_rate_hz);
+    uint32_t min_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
+    if ( cycles < min_cycles )
+    {
+      cycles = min_cycles;
+    }
+    s_step_interval_cycles = cycles;
+  }
+  else
+  {
+    s_step_interval_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
+  }
+
+  /* 9. Periodic TMC2209 Health Diagnostics (polled only when motor is idle or on hardware fault) */
   static uint8_t s_tmc_check_cnt = 0;
   s_tmc_check_cnt++;
-  if ( s_tmc_online && (s_tmc_check_cnt >= 10) )
+  if ( s_tmc_online && (s_tmc_check_cnt >= 20) )
   {
     s_tmc_check_cnt = 0;
-    if ( TMC2209_ReadStatus(&s_tmc_status) )
+    if ( (s_current_step == s_target_step) || (HAL_GPIO_ReadPin(MOTOR_DIAG_PORT, MOTOR_DIAG_PIN) == GPIO_PIN_SET) )
     {
-      if ( s_tmc_status.driver_fault )
+      if ( TMC2209_ReadStatus(&s_tmc_status) )
       {
-        Motor_EmergencyStop();
+        if ( s_tmc_status.driver_fault )
+        {
+          Motor_EmergencyStop();
+        }
       }
     }
   }
@@ -394,7 +477,7 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
 ** Return:
 **   None
 ** Notes:
-**   Maintains microsecond minimum step period using Cortex-M4 DWT cycles
+**   Maintains microsecond step period paced to current velocity using Cortex-M4 DWT cycles
 */
 void Motor_StepTask(void)
 {
@@ -408,12 +491,11 @@ void Motor_StepTask(void)
     return;
   }
 
-  /* Check if minimum step interval has elapsed */
+  /* Check if dynamically paced step interval has elapsed */
   uint32_t cycles_now     = DWT->CYCCNT;
   uint32_t cycles_elapsed = cycles_now - s_last_step_cycle;
-  uint32_t min_cycles     = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
 
-  if ( cycles_elapsed < min_cycles )
+  if ( cycles_elapsed < s_step_interval_cycles )
   {
     return;
   }
@@ -560,12 +642,27 @@ static uint32_t s_homing_debounce      = 6;     /* 6 stall pulses to confirm har
 static uint16_t s_homing_current_mA    = 1000;  /* 1000 mA soft homing current */
 static char     s_homing_diagnostic[64] = "INIT";
 
+/* Read formatted diagnostic outcome string from last homing operation
+** Parameters:
+**   None
+** Return:
+**   const char *: Diagnostic outcome string
+** Notes:
+**   None
+*/
 const char *Motor_GetHomingDiagnostic(void)
 {
   return s_homing_diagnostic;
-}
+} /* Motor_GetHomingDiagnostic() */
 
-/* Microsecond-resolution busy wait utilizing Cortex-M4 DWT cycles */
+/* Microsecond-resolution busy wait utilizing Cortex-M4 DWT cycles
+** Parameters:
+**   us - Microseconds to delay
+** Return:
+**   None
+** Notes:
+**   Private helper function
+*/
 static inline void delay_us(uint32_t us)
 {
   uint32_t start = DWT->CYCCNT;
@@ -574,41 +671,101 @@ static inline void delay_us(uint32_t us)
   {
     __NOP();
   }
-}
+} /* delay_us() */
 
+/* Program StallGuard4 threshold sensitivity for sensorless homing
+** Parameters:
+**   threshold - StallGuard4 threshold value (0..255)
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Motor_SetHomingStallGuardThreshold(uint8_t threshold)
 {
   s_homing_sgthrs = threshold;
-}
+} /* Motor_SetHomingStallGuardThreshold() */
 
+/* Read currently configured homing StallGuard4 threshold
+** Parameters:
+**   None
+** Return:
+**   uint8_t: Configured threshold value
+** Notes:
+**   None
+*/
 uint8_t Motor_GetHomingStallGuardThreshold(void)
 {
   return s_homing_sgthrs;
-}
+} /* Motor_GetHomingStallGuardThreshold() */
 
+/* Configure step period in microseconds for homing search
+** Parameters:
+**   speed_us - Microseconds per step pulse
+** Return:
+**   None
+** Notes:
+**   Clamped to safe search bounds (150..2000 us)
+*/
 void Motor_SetHomingSpeedUs(uint32_t speed_us)
 {
-  if ( speed_us < 150 )  speed_us = 150;
-  if ( speed_us > 2000 ) speed_us = 2000;
+  if ( speed_us < 150 )
+  {
+    speed_us = 150;
+  }
+  else if ( speed_us > 2000 )
+  {
+    speed_us = 2000;
+  }
   s_homing_speed_us = speed_us;
-}
+} /* Motor_SetHomingSpeedUs() */
 
+/* Read currently configured homing search step period
+** Parameters:
+**   None
+** Return:
+**   uint32_t: Microseconds per step
+** Notes:
+**   None
+*/
 uint32_t Motor_GetHomingSpeedUs(void)
 {
   return s_homing_speed_us;
-}
+} /* Motor_GetHomingSpeedUs() */
 
+/* Configure current in mA for soft homing contact
+** Parameters:
+**   ma - Motor RMS current in milliamps (400..1800 mA)
+** Return:
+**   None
+** Notes:
+**   None
+*/
 void Motor_SetHomingCurrentMa(uint16_t ma)
 {
-  if ( ma < 400 )  ma = 400;
-  if ( ma > 1800 ) ma = 1800;
+  if ( ma < 400 )
+  {
+    ma = 400;
+  }
+  else if ( ma > 1800 )
+  {
+    ma = 1800;
+  }
   s_homing_current_mA = ma;
-}
+} /* Motor_SetHomingCurrentMa() */
 
+/* Read currently configured soft homing current
+** Parameters:
+**   None
+** Return:
+**   uint16_t: Current in mA
+** Notes:
+**   None
+*/
 uint16_t Motor_GetHomingCurrentMa(void)
 {
   return s_homing_current_mA;
-}
+} /* Motor_GetHomingCurrentMa() */
 
 /* Configure StallGuard4 stall sensitivity threshold (0..255)
 ** Parameters:
@@ -696,8 +853,13 @@ bool Motor_Home(void)
     }
     HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
 
-    /* Controlled homing speed: s_homing_speed_us (default 350 us -> ~54 RPM / strong back-EMF) */
-    delay_us(s_homing_speed_us);
+    /* Smooth acceleration ramp at start of homing to prevent sudden torque shock */
+    uint32_t step_delay = s_homing_speed_us;
+    if ( i < 300 )
+    {
+      step_delay = 800 - (((800 - s_homing_speed_us) * i) / 300);
+    }
+    delay_us(step_delay);
 
     /* Ignore initial s_homing_startup_steps (default 1200 steps / 3 mm) while motor accelerates from standstill */
     if ( i > (int32_t)s_homing_startup_steps )
@@ -739,30 +901,19 @@ bool Motor_Home(void)
           stall_debounce--;
         }
       }
-
-      /* 3. Safety Fallback: Read SG_RESULT via UART every 64 steps (~22 ms at 350 us) */
-      if ( (i % 64) == 0 && s_tmc_online )
-      {
-        uint16_t sg = TMC2209_ReadStallGuard();
-        last_sg = sg;
-        if ( sg < min_sg )
-        {
-          min_sg = sg;
-        }
-        if ( sg <= (uint16_t)(s_homing_sgthrs * 2) )
-        {
-          end_found = true;
-          stop_cause = "STALL_UART_SG";
-          stop_step = i;
-          break;
-        }
-      }
     }
   }
 
   HAL_Delay(30);
 
-  /* 3. Move 5 mm AWAY (forward / extend) */
+  /* Query StallGuard diagnostic at end of homing search */
+  if ( s_tmc_online )
+  {
+    last_sg = TMC2209_ReadStallGuard();
+    min_sg  = last_sg;
+  }
+
+  /* 3. Move 5 mm AWAY (forward / extend) with smooth trapezoidal ramp */
   int32_t backoff_steps = (int32_t)lroundf(5.0f * s_steps_per_mm);
   /* Opposite of homing search direction */
   HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_RESET : GPIO_PIN_SET);
@@ -776,16 +927,27 @@ bool Motor_Home(void)
     }
     HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
 
-    delay_us(s_homing_speed_us);
+    uint32_t backoff_delay = s_homing_speed_us;
+    if ( i < 200 )
+    {
+      backoff_delay = 800 - (((800 - s_homing_speed_us) * i) / 200);
+    }
+    else if ( i > (backoff_steps - 200) )
+    {
+      backoff_delay = s_homing_speed_us + (((800 - s_homing_speed_us) * (i - (backoff_steps - 200))) / 200);
+    }
+    delay_us(backoff_delay);
   }
 
   /* 4. Calibrate new physical 0.0 mm home at this 5 mm standoff position */
-  s_current_step     = 0;
-  s_target_step      = 0;
-  s_current_pos_mm   = 0.0f;
-  s_profiled_pos_mm  = 0.0f;
-  s_commanded_pos_mm = 0.0f;
-  s_integral         = 0.0f;
+  s_current_step         = 0;
+  s_target_step          = 0;
+  s_current_pos_mm       = 0.0f;
+  s_profiled_pos_mm      = 0.0f;
+  s_commanded_pos_mm     = 0.0f;
+  s_current_vel_mm_s     = 0.0f;
+  s_integral             = 0.0f;
+  s_step_interval_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
 
   /* Record detailed diagnostic outcome */
   snprintf(s_homing_diagnostic, sizeof(s_homing_diagnostic),
@@ -804,7 +966,14 @@ bool Motor_Home(void)
   return end_found;
 } /* Motor_Home() */
 
-/* Sensorless homing alias */
+/* Sensorless homing convenience alias
+** Parameters:
+**   None
+** Return:
+**   bool: True if homed and backed off successfully
+** Notes:
+**   Delegates directly to Motor_Home()
+*/
 bool Motor_SensorlessHome(void)
 {
   return Motor_Home();

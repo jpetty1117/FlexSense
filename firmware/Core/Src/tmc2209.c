@@ -176,6 +176,10 @@ bool TMC2209_ReadRegister(uint8_t reg, uint32_t *data)
 ** Parameters:
 **   buf - Destination string buffer
 **   max_len - Maximum buffer capacity
+** Return:
+**   None
+** Notes:
+**   None
 */
 void TMC2209_GetDiagnostic(char *buf, size_t max_len)
 {
@@ -479,6 +483,7 @@ bool TMC2209_ConfigureCoolStep(uint8_t semin, uint8_t semax)
   if ( semin == 0 )
   {
     /* Disable CoolStep */
+    TMC2209_WriteRegister(TMC2209_REG_TCOOLTHRS, 0);
     return TMC2209_WriteRegister(TMC2209_REG_COOLCONF, 0);
   }
 
@@ -487,8 +492,9 @@ bool TMC2209_ConfigureCoolStep(uint8_t semin, uint8_t semax)
                       ((uint32_t)(semax & 0x0F) << 8)   |
                       (1U << 13);
 
-  /* Enable CoolStep threshold speed */
-  TMC2209_WriteRegister(TMC2209_REG_TCOOLTHRS, 0x000FFFFF);
+  /* Enable CoolStep threshold speed (TCOOLTHRS = 200,000 -> active above ~2.4 mm/s / 60 full steps/s)
+  ** Disables current modulation at low creep speeds to eliminate torque hunting while fine-positioning */
+  TMC2209_WriteRegister(TMC2209_REG_TCOOLTHRS, 200000);
   return TMC2209_WriteRegister(TMC2209_REG_COOLCONF, coolconf);
 } /* TMC2209_ConfigureCoolStep() */
 

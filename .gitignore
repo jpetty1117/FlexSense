@@ -90,3 +90,4 @@ Thumbs.db
 .directory
 docs
 tools
+*.md
