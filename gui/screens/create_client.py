@@ -1,5 +1,5 @@
 """
-Create Client screen — form for adding a new client.
+Create Client screen - form for adding a new client.
 """
 
 from PySide6.QtWidgets import (
@@ -76,7 +76,7 @@ class CreateClientScreen(QWidget):
             length_in = float(pin_num + 8)
             cm = length_in * 2.54
             self.input_forearm.addItem(
-                f"Pin {pin_num} — {length_in:.0f}\" ({cm:.1f} cm)",
+                f"Pin {pin_num}: {length_in:.0f}\" ({cm:.1f} cm)",
                 userData={"pin": pin_num, "inches": length_in}
             )
         self.input_forearm.setCurrentIndex(3)  # Default Pin 4 (12 in)

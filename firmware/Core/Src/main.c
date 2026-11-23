@@ -136,6 +136,7 @@ int main(void)
       case CMD_STOP:
         s_sys_state = SYS_STATE_IDLE;
         Motor_SetResistanceLbs(0.0f);
+        Motor_EmergencyStop();
         Telemetry_SendAck("ACK:STOP\r\n");
         break;
 
@@ -149,10 +150,62 @@ int main(void)
         }
         break;
 
+      case CMD_SET_TORQUE:
+        {
+          float t = Telemetry_GetCommandParam();
+          Motor_SetTorqueLbfIn(t);
+          char ack[48];
+          snprintf(ack, sizeof(ack), "ACK:TORQUE:%.2f\r\n", t);
+          Telemetry_SendAck(ack);
+        }
+        break;
+
+      case CMD_SET_ARM:
+        {
+          float arm = Telemetry_GetCommandParam();
+          Motor_SetForearmLengthIn(arm);
+          char ack[48];
+          snprintf(ack, sizeof(ack), "ACK:ARM:%.2f\r\n", arm);
+          Telemetry_SendAck(ack);
+        }
+        break;
+
+      case CMD_RESET_ARREST:
+        {
+          Motor_ResetDescentArrest();
+          Telemetry_SendAck("ACK:RESET_ARREST:OK\r\n");
+        }
+        break;
+
+      case CMD_SET_ARREST_THRESH:
+        {
+          float thr = Telemetry_GetCommandParam();
+          Motor_SetDescentArrestThreshold(thr);
+          char ack[48];
+          snprintf(ack, sizeof(ack), "ACK:ARRESTTHR:%.1f\r\n", thr);
+          Telemetry_SendAck(ack);
+        }
+        break;
+
+      case CMD_SET_POSITION:
+        {
+          float pos_mm = Telemetry_GetCommandParam();
+          Motor_SetCommandedPositionMm(pos_mm);
+          char ack[48];
+          snprintf(ack, sizeof(ack), "ACK:POS:%.2f\r\n", pos_mm);
+          Telemetry_SendAck(ack);
+        }
+        break;
+
       case CMD_ZERO:
         Encoder_Zero();
         LoadCell_Tare();
         Telemetry_SendAck("ACK:ZERO\r\n");
+        break;
+
+      case CMD_ZERO_MOTOR:
+        Motor_ZeroPosition();
+        Telemetry_SendAck("ACK:ZEROPOS:OK,POS=0.0\r\n");
         break;
 
       case CMD_STATUS:
@@ -270,6 +323,43 @@ int main(void)
           char curr_ack[64];
           snprintf(curr_ack, sizeof(curr_ack), "ACK:HOMECURR:%u\r\n", curr);
           Telemetry_SendAck(curr_ack);
+        }
+        break;
+
+      case CMD_SET_HOMESLACK:
+        {
+          float slack = Telemetry_GetCommandParam();
+          Motor_SetHomingSlackMm(slack);
+          char slk_ack[64];
+          snprintf(slk_ack, sizeof(slk_ack), "ACK:HOMESLACK:%.2f\r\n", slack);
+          Telemetry_SendAck(slk_ack);
+        }
+        break;
+
+      case CMD_SET_DIR:
+        {
+          float d = Telemetry_GetCommandParam();
+          bool inv;
+          if ( d == -2.0f )
+          {
+            /* Query direction only without altering */
+            inv = Motor_IsInvertedDirection();
+          }
+          else if ( d < 0.0f )
+          {
+            /* Toggle direction */
+            inv = !Motor_IsInvertedDirection();
+            Motor_SetInvertedDirection(inv);
+          }
+          else
+          {
+            /* Explicit setting (1 = inverted, 0 = normal) */
+            inv = (d > 0.5f);
+            Motor_SetInvertedDirection(inv);
+          }
+          char dir_ack[48];
+          snprintf(dir_ack, sizeof(dir_ack), "ACK:DIR:%d\r\n", inv ? 1 : 0);
+          Telemetry_SendAck(dir_ack);
         }
         break;
 

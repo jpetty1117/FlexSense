@@ -2,7 +2,13 @@
 Dark medical/clinical theme for the Rehabilitation Test GUI.
 """
 
+import os
+
 # ── Color Palette ────────────────────────────────────────────────
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+CHEVRON_DOWN = os.path.join(ASSETS_DIR, "chevron_down.svg")
+CHEVRON_UP = os.path.join(ASSETS_DIR, "chevron_up.svg")
+
 COLORS = {
     "bg_dark": "#0d1117",
     "bg_card": "#161b22",
@@ -163,12 +169,9 @@ STYLESHEET = f"""
     }}
 
     QDateEdit::down-arrow, QComboBox::down-arrow {{
-        image: none;
-        width: 0;
-        height: 0;
-        border-left: 5px solid transparent;
-        border-right: 5px solid transparent;
-        border-top: 6px solid {COLORS['accent']};
+        image: url("{CHEVRON_DOWN}");
+        width: 10px;
+        height: 6px;
     }}
 
     QDateEdit::drop-down:hover, QComboBox::drop-down:hover {{
@@ -211,11 +214,35 @@ STYLESHEET = f"""
         selection-color: white;
     }}
 
-    QSpinBox::up-button, QSpinBox::down-button,
-    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-        background-color: {COLORS['bg_surface']};
-        border: 1px solid {COLORS['border']};
+    QSpinBox::up-button, QDoubleSpinBox::up-button {{
+        subcontrol-origin: border;
+        subcontrol-position: top right;
         width: 20px;
+        background-color: {COLORS['bg_surface']};
+        border-left: 1px solid {COLORS['border']};
+        border-bottom: 1px solid {COLORS['border']};
+        border-top-right-radius: 5px;
+    }}
+
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+        image: url("{CHEVRON_UP}");
+        width: 8px;
+        height: 5px;
+    }}
+
+    QSpinBox::down-button, QDoubleSpinBox::down-button {{
+        subcontrol-origin: border;
+        subcontrol-position: bottom right;
+        width: 20px;
+        background-color: {COLORS['bg_surface']};
+        border-left: 1px solid {COLORS['border']};
+        border-bottom-right-radius: 5px;
+    }}
+
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+        image: url("{CHEVRON_DOWN}");
+        width: 8px;
+        height: 5px;
     }}
 
     QSpinBox::up-button:hover, QSpinBox::down-button:hover,

@@ -482,8 +482,7 @@ bool TMC2209_ConfigureCoolStep(uint8_t semin, uint8_t semax)
 {
   if ( semin == 0 )
   {
-    /* Disable CoolStep */
-    TMC2209_WriteRegister(TMC2209_REG_TCOOLTHRS, 0);
+    /* Disable CoolStep without zeroing TCOOLTHRS (so StallGuard4 remains active) */
     return TMC2209_WriteRegister(TMC2209_REG_COOLCONF, 0);
   }
 

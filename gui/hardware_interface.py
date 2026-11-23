@@ -57,6 +57,9 @@ class STM32EncoderInterface:
         self._last_reconnect_attempt = 0.0
 
         self.rx_buffer = bytearray()
+        self.rx_text_lines = []
+        self.packets_received = 0
+        self.crc_errors = 0
 
         self.last_timestamp_ms = 0
         self.last_angle = 0.0
@@ -98,9 +101,14 @@ class STM32EncoderInterface:
 
         try:
             self.ser = serial.Serial(target_port, self.baudrate, timeout=0.05)
+            self.ser.dtr = True
+            self.ser.rts = True
             self.port = target_port
             self.is_connected = True
             self.rx_buffer.clear()
+            self.rx_text_lines.clear()
+            self.packets_received = 0
+            self.crc_errors = 0
             time.sleep(0.05)
             self.ser.reset_input_buffer()
             # Send STOP to ensure it starts in IDLE
@@ -130,6 +138,7 @@ class STM32EncoderInterface:
         self.is_connected = False
         self.is_streaming = False
         self.rx_buffer.clear()
+        self.rx_text_lines.clear()
 
     def send_command(self, cmd):
         """Send an ASCII text command (e.g. 'START', 'STOP', 'ZERO', 'RES 10.0', '?') to the STM32."""
@@ -234,6 +243,26 @@ class STM32EncoderInterface:
             return self.send_command("HOME")
         return False
 
+    def _extract_ascii_from_bytes(self, raw: bytes):
+        """Extract complete newline-delimited ASCII text lines from buffer."""
+        if not raw:
+            return
+        try:
+            text = raw.decode("utf-8", errors="ignore")
+            for line in text.splitlines():
+                line = line.strip()
+                # Keep lines that have at least some printable letters/digits (ignores binary noise)
+                if line and any(c.isalnum() for c in line):
+                    self.rx_text_lines.append(line)
+        except Exception:
+            pass
+
+    def read_text_lines(self):
+        """Return and clear newly arrived ASCII lines from MCU."""
+        lines = list(self.rx_text_lines)
+        self.rx_text_lines.clear()
+        return lines
+
     def read_samples(self):
         """
         Non-blocking read and unpack of all newly arrived 28-byte binary packets.
@@ -266,16 +295,35 @@ class STM32EncoderInterface:
                 if chunk:
                     self.rx_buffer.extend(chunk)
 
-            # Slide window to find 0xAA 0x55 preamble and extract packets
+            # 1. First extract any complete ASCII lines before any binary preamble (or if no preamble exists)
+            while True:
+                idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
+                limit = idx if idx != -1 else len(self.rx_buffer)
+                nl_idx = self.rx_buffer[:limit].rfind(b"\n")
+                if nl_idx != -1:
+                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:nl_idx + 1]))
+                    del self.rx_buffer[:nl_idx + 1]
+                elif idx > 0 and nl_idx == -1:
+                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:idx]))
+                    del self.rx_buffer[:idx]
+                else:
+                    break
+
+            # 2. Slide window to find 0xAA 0x55 preamble and extract packets
             while len(self.rx_buffer) >= self.PACKET_SIZE:
                 idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
                 if idx == -1:
-                    # Keep last byte in case it's 0xAA of a split preamble
-                    del self.rx_buffer[:-1]
+                    nl_idx = self.rx_buffer.rfind(b"\n")
+                    if nl_idx != -1:
+                        self._extract_ascii_from_bytes(bytes(self.rx_buffer[:nl_idx + 1]))
+                        del self.rx_buffer[:nl_idx + 1]
+                    elif len(self.rx_buffer) > 256:
+                        self._extract_ascii_from_bytes(bytes(self.rx_buffer))
+                        del self.rx_buffer[:]
                     break
 
                 if idx > 0:
-                    # Drop any leading garbage bytes before preamble
+                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:idx]))
                     del self.rx_buffer[:idx]
 
                 if len(self.rx_buffer) < self.PACKET_SIZE:
@@ -290,6 +338,7 @@ class STM32EncoderInterface:
                 calculated_crc = compute_crc16(pkt_bytes[:-2])
 
                 if calculated_crc == expected_crc:
+                    self.packets_received += 1
                     p0, p1, t_ms, angle, vel, load, iq, spo2, crc = struct.unpack(
                         self.PACKET_FORMAT, pkt_bytes
                     )
@@ -304,6 +353,15 @@ class STM32EncoderInterface:
                     # Return formatted sample tuple
                     samples.append((t_ms, 0, angle, vel, load, iq, spo2))
                 else:
+                    self.crc_errors += 1
+
+            # 3. Extract any trailing ASCII lines left after packets
+            nl_idx = self.rx_buffer.rfind(b"\n")
+            if nl_idx != -1:
+                idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
+                if idx == -1 or nl_idx < idx:
+                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:nl_idx + 1]))
+                    del self.rx_buffer[:nl_idx + 1]
                     # CRC error: preamble was a false positive, advance by 1 byte to re-sync
                     self.rx_buffer = bytearray(pkt_bytes[1:]) + self.rx_buffer
 

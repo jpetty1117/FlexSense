@@ -18,7 +18,7 @@ The FlexSense platform consists of two integrated software layers working togeth
 ┌────────────────────────────────────▼────────────────────────────────────┐
 │                    Embedded Firmware (STM32F401RE)                      │
 │  - 10ms Real-Time Control Scheduler             - Load Cell Force API   │
-│  - TIM2 4X Encoder Kinematics (0.15° Res)       - MAX30102 SpO2 Vitals  │
+│  - TIM2 4X Encoder Kinematics (0.075° Res via 2:1 belt) - MAX30102 SpO2 Vitals  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,7 +91,7 @@ The embedded firmware runs on an **STM32F401RE Nucleo** board, structured around
 | Module | Files | Responsibility |
 | :--- | :--- | :--- |
 | **Executive** | `main.c` | Top-level state machine (`IDLE`, `STREAMING`), subsystem initialization, and 10ms periodic control scheduler. |
-| **Encoder** | `encoder.c`, `encoder.h` | TIM2 4X hardware decoding, $0.15^\circ$ resolution, 40ms circular windowed velocity filter, and EMA low-pass filtering. |
+| **Encoder** | `encoder.c`, `encoder.h` | TIM2 4X hardware decoding, $0.075^\circ$ resolution (2:1 belt reduction), 40ms circular windowed velocity filter, and EMA low-pass filtering. |
 | **Telemetry** | `telemetry.c`, `telemetry.h` | Non-blocking command parsing (`START`, `STOP`, `ZERO`, `STATUS`), CRC-16-CCITT integrity checks, and 28-byte packed binary packet transmission. |
 | **Load Cell** | `load_cell.c`, `load_cell.h` | Calibration, tare offsets, and instantaneous handle contact force acquisition (lbs / Newtons). |
 | **Torque Actuator** | `motor.c`, `motor.h` | Isotonic resistance torque commands, actuator effort feedback, and emergency braking HAL. |

@@ -1,0 +1,41 @@
+{
+  "tare_count": 0,
+  "counts_per_lb": 106971.88842398107,
+  "lbs_per_count": 9.348250411701799e-06,
+  "intercept_lbs": -0.0018452950877509906,
+  "r_squared": 0.9999999746690891,
+  "max_nl_lbs": 0.0017818260719835166,
+  "max_nl_pct_fs": 0.007127304287934067,
+  "points": [
+    {
+      "weight_lbs": 0.0,
+      "raw_count": 17,
+      "delta_count": 17
+    },
+    {
+      "weight_lbs": 5.0,
+      "raw_count": 535071,
+      "delta_count": 535071
+    },
+    {
+      "weight_lbs": 10.0,
+      "raw_count": 1070068,
+      "delta_count": 1070068
+    },
+    {
+      "weight_lbs": 15.0,
+      "raw_count": 1604961,
+      "delta_count": 1604961
+    },
+    {
+      "weight_lbs": 20.0,
+      "raw_count": 2139655,
+      "delta_count": 2139655
+    },
+    {
+      "weight_lbs": 25.0,
+      "raw_count": 2674304,
+      "delta_count": 2674304
+    }
+  ]
+}

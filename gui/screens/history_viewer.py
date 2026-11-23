@@ -1,5 +1,5 @@
 """
-History Viewer screen — displays historical test sessions and their data.
+History Viewer screen - displays historical test sessions and their data.
 Strength is displayed as a constant label (isotonic).
 Axis scaling via drag on axes, panning via drag in graph (native pyqtgraph).
 """
@@ -93,7 +93,7 @@ class HistoryViewerScreen(QWidget):
         # Strength indicator (isotonic constant)
         strength_box = QGroupBox("Isotonic Strength")
         strength_box_layout = QVBoxLayout(strength_box)
-        self.lbl_strength = QLabel("— lbs")
+        self.lbl_strength = QLabel("-- lbs")
         self.lbl_strength.setAlignment(Qt.AlignCenter)
         self.lbl_strength.setStyleSheet(f"""
             font-size: 24px;
@@ -363,7 +363,7 @@ class HistoryViewerScreen(QWidget):
         self.client_id = client_id
         client = self.db.get_client(client_id)
         if client:
-            self.title_label.setText(f"Test History — {client['name']}")
+            self.title_label.setText(f"Test History: {client['name']}")
 
         self.sessions = self.db.get_sessions(client_id)
         self.session_list.clear()
@@ -390,7 +390,7 @@ class HistoryViewerScreen(QWidget):
         self.current_vel_data = []
         self.current_spo2_data = []
         self.lbl_session_info.setText("Select a session to view its data.")
-        self.lbl_strength.setText("— lbs")
+        self.lbl_strength.setText("-- lbs")
 
         # Auto-select first
         if self.sessions:

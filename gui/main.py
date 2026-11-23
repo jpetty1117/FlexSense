@@ -1,5 +1,5 @@
 """
-Rehab Test System — Main Application Entry Point
+Rehab Test System - Main Application Entry Point
 
 PySide6 + PyQtGraph + SQLite rehabilitation testing GUI.
 Persistent left sidebar for navigation.
@@ -27,6 +27,7 @@ from screens.create_client import CreateClientScreen
 from screens.client_dashboard import ClientDashboardScreen
 from screens.live_test import LiveTestScreen
 from screens.history_viewer import HistoryViewerScreen
+from screens.dev_tools import DevToolsScreen
 
 
 # ── Screen indices ───────────────────────────────────────────
@@ -35,6 +36,7 @@ SCREEN_CREATE_CLIENT = 1
 SCREEN_CLIENT_DASHBOARD = 2
 SCREEN_LIVE_TEST = 3
 SCREEN_HISTORY_VIEWER = 4
+SCREEN_DEV_TOOLS = 5
 
 
 class RehabTestApp(QMainWindow):
@@ -130,6 +132,9 @@ class RehabTestApp(QMainWindow):
         self.btn_new_client = self._nav_button("New Client", self._goto_create_client)
         layout.addWidget(self.btn_new_client)
 
+        self.btn_dev_tools = self._nav_button("Dev && Calibration", self._goto_dev_tools)
+        layout.addWidget(self.btn_dev_tools)
+
         # ── Active client section ────────────────────────
         self.client_section = QWidget()
         client_layout = QVBoxLayout(self.client_section)
@@ -205,7 +210,7 @@ class RehabTestApp(QMainWindow):
 
         # Store all nav buttons for active highlighting
         self._nav_buttons = [
-            self.btn_clients, self.btn_new_client,
+            self.btn_clients, self.btn_new_client, self.btn_dev_tools,
             self.btn_dashboard, self.btn_test, self.btn_history,
         ]
 
@@ -423,12 +428,14 @@ class RehabTestApp(QMainWindow):
         self.client_dashboard = ClientDashboardScreen(self.db)
         self.live_test = LiveTestScreen(self.db)
         self.history_viewer = HistoryViewerScreen(self.db)
+        self.dev_tools = DevToolsScreen(self.db, hw=self.live_test.hw)
 
         self.stack.addWidget(self.client_list)        # 0
         self.stack.addWidget(self.create_client)       # 1
         self.stack.addWidget(self.client_dashboard)    # 2
         self.stack.addWidget(self.live_test)            # 3
         self.stack.addWidget(self.history_viewer)       # 4
+        self.stack.addWidget(self.dev_tools)            # 5
 
     def _connect_signals(self):
         # Client List → select a client
@@ -491,6 +498,10 @@ class RehabTestApp(QMainWindow):
             self.history_viewer.load_client(self._active_client_id)
             self.stack.setCurrentIndex(SCREEN_HISTORY_VIEWER)
             self._set_active_button(self.btn_history)
+
+    def _goto_dev_tools(self):
+        self.stack.setCurrentIndex(SCREEN_DEV_TOOLS)
+        self._set_active_button(self.btn_dev_tools)
 
     # ── Signal Handlers ──────────────────────────────────
     def _on_client_selected(self, client_id):

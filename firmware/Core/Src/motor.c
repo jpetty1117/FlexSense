@@ -12,6 +12,8 @@
 */
 
 #include "motor.h"
+#include "brake_lut.h"
+#include "telemetry.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -33,9 +35,20 @@ static uint32_t         s_step_interval_cycles  = 0;
 
 static float            s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 static bool             s_motor_enabled         = false;
-static bool             s_dir_inverted          = false;
+static bool             s_direct_pos_active     = false;
+static float            s_direct_pos_override_mm = 0.0f;
+static bool             s_dir_inverted          = true; /* Default inverted polarity so homing retracts towards home switch */
 static uint16_t         s_configured_run_mA     = TMC2209_DEFAULT_RUN_CURRENT_MA;
 static uint8_t          s_configured_hold_pct   = TMC2209_DEFAULT_HOLD_PERCENT;
+
+/* Torque, Forearm Lever & Descent Drop Safety State */
+static float            s_forearm_length_in     = 12.0f; /* Default Pin 4: 12.0 inches */
+static float            s_target_torque_lbf_in  = 0.0f;
+static bool             s_descent_arrest_active = false;
+static uint32_t         s_descent_arrest_tick   = 0;
+static float            s_descent_arrest_thresh_deg_s = -160.0f; /* Deg/s drop trigger */
+static float            s_prev_velocity_deg_s   = 0.0f;
+#define DESCENT_LOCKUP_CLAMP_MM                 16.0f   /* Clamp carriage forward to halt drop */
 
 /* TMC2209 UART State */
 static bool             s_tmc_online            = false;
@@ -86,7 +99,7 @@ void Motor_Init(void)
   GPIO_InitStruct.Pull  = GPIO_NOPULL;
   HAL_GPIO_Init(MOTOR_INDEX_PORT, &GPIO_InitStruct);
 
-  /* 5. Configure Physical Limit Switch (PB12) with internal pull-up (Active LOW switch to GND) */
+  /* 5. Configure Physical Limit Switch (PB13) with internal pull-up (Active LOW switch to free GND) */
   GPIO_InitStruct.Pin   = MOTOR_LIMIT_PIN;
   GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull  = GPIO_PULLUP;
@@ -107,6 +120,8 @@ void Motor_Init(void)
 
   /* 6. Reset all control states */
   s_target_resistance_lbs = 0.0f;
+  s_direct_pos_active     = false;
+  s_direct_pos_override_mm = 0.0f;
   s_integral              = 0.0f;
   s_feedforward_pos_mm    = 0.0f;
   s_commanded_pos_mm      = 0.0f;
@@ -119,9 +134,48 @@ void Motor_Init(void)
   s_last_step_cycle       = DWT->CYCCNT;
   s_step_interval_cycles  = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
   s_motor_enabled         = false;
-  s_dir_inverted          = false;
+  s_dir_inverted          = true;  /* Default inverted polarity so homing search retracts towards limit switch */
   s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 } /* Motor_Init() */
+
+/* Command target shaft braking torque directly in lbf*in
+** Parameters:
+**   torque_lbf_in - Commanded braking torque in lbf*in [0.0, BRAKE_LUT_MAX_TORQUE_LBF_IN]
+** Return:
+**   None
+*/
+void Motor_SetTorqueLbfIn(float torque_lbf_in)
+{
+  s_direct_pos_active = false;
+  if ( torque_lbf_in < 0.0f )
+  {
+    torque_lbf_in = 0.0f;
+  }
+  else if ( torque_lbf_in > BRAKE_LUT_MAX_TORQUE_LBF_IN )
+  {
+    torque_lbf_in = BRAKE_LUT_MAX_TORQUE_LBF_IN;
+  }
+
+  s_target_torque_lbf_in = torque_lbf_in;
+  if ( s_forearm_length_in > 0.1f )
+  {
+    s_target_resistance_lbs = torque_lbf_in / s_forearm_length_in;
+  }
+
+  if ( torque_lbf_in > 0.0f )
+  {
+    s_motor_enabled = true;
+    HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_ACTIVE_LEVEL);
+  }
+  else
+  {
+    /* Homing / slack release commanded */
+    s_motor_enabled = false;
+    s_integral = 0.0f;
+    s_commanded_pos_mm = 0.0f;
+    HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_ACTIVE_LEVEL);
+  }
+} /* Motor_SetTorqueLbfIn() */
 
 /* Command target rehabilitation resistance load in pounds
 ** Parameters:
@@ -129,7 +183,7 @@ void Motor_Init(void)
 ** Return:
 **   None
 ** Notes:
-**   None
+**   Internally converts to shaft torque using current forearm length
 */
 void Motor_SetResistanceLbs(float resistance_lbs)
 {
@@ -143,22 +197,101 @@ void Motor_SetResistanceLbs(float resistance_lbs)
   }
 
   s_target_resistance_lbs = resistance_lbs;
-
-  if ( resistance_lbs > 0.0f )
-  {
-    s_motor_enabled = true;
-    HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_ACTIVE_LEVEL);
-  }
-  else
-  {
-    /* Homing / slack release commanded */
-    s_motor_enabled = false;
-    s_integral = 0.0f;
-    s_commanded_pos_mm = 0.0f;
-    /* Driver remains enabled until carriage reaches home position in Motor_StepTask */
-    HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_ACTIVE_LEVEL);
-  }
+  Motor_SetTorqueLbfIn(resistance_lbs * s_forearm_length_in);
 } /* Motor_SetResistanceLbs() */
+
+/* Configure patient forearm lever length in inches
+** Parameters:
+**   arm_in - Forearm length in inches [5.0 to 20.0 in]
+*/
+void Motor_SetForearmLengthIn(float arm_in)
+{
+  if ( (arm_in >= 5.0f) && (arm_in <= 20.0f) )
+  {
+    s_forearm_length_in = arm_in;
+    if ( s_target_resistance_lbs > 0.0f )
+    {
+      Motor_SetTorqueLbfIn(s_target_resistance_lbs * s_forearm_length_in);
+    }
+  }
+}
+
+float Motor_GetForearmLengthIn(void)
+{
+  return s_forearm_length_in;
+}
+
+float Motor_GetTargetTorqueLbfIn(void)
+{
+  return s_target_torque_lbf_in;
+}
+
+bool Motor_IsDescentArrestActive(void)
+{
+  return s_descent_arrest_active;
+}
+
+void Motor_ResetDescentArrest(void)
+{
+  s_descent_arrest_active = false;
+}
+
+void Motor_SetDescentArrestThreshold(float max_neg_vel_deg_s)
+{
+  if ( max_neg_vel_deg_s > 0.0f )
+  {
+    max_neg_vel_deg_s = -max_neg_vel_deg_s;
+  }
+  s_descent_arrest_thresh_deg_s = max_neg_vel_deg_s;
+}
+
+/* Directly command physical carriage displacement in mm (bypasses LUT for calibration)
+** Parameters:
+**   pos_mm - Desired linear displacement in mm [0.0, X_MAX_TRAVEL_MM]
+** Return:
+**   None
+** Notes:
+**   Used during LUT capture and mechanical calibration
+*/
+void Motor_SetCommandedPositionMm(float pos_mm)
+{
+  if ( pos_mm < X_MIN_TRAVEL_MM )
+  {
+    pos_mm = X_MIN_TRAVEL_MM;
+  }
+  else if ( pos_mm > X_MAX_TRAVEL_MM )
+  {
+    pos_mm = X_MAX_TRAVEL_MM;
+  }
+
+  s_direct_pos_override_mm = pos_mm;
+  s_direct_pos_active      = true;
+  s_commanded_pos_mm       = pos_mm;
+  s_target_resistance_lbs  = 0.0f;
+  s_integral               = 0.0f;
+
+  s_motor_enabled = true;
+  HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_ACTIVE_LEVEL);
+} /* Motor_SetCommandedPositionMm() */
+
+/* Reset/zero carriage tracking position to 0.0 mm without mechanical movement
+** Parameters:
+**   None
+** Return:
+**   None
+** Notes:
+**   Call when physical carriage is at designated 0 mm reference
+*/
+void Motor_ZeroPosition(void)
+{
+  s_current_step           = 0;
+  s_target_step            = 0;
+  s_current_pos_mm         = 0.0f;
+  s_commanded_pos_mm       = 0.0f;
+  s_profiled_pos_mm        = 0.0f;
+  s_direct_pos_override_mm = 0.0f;
+  s_integral               = 0.0f;
+} /* Motor_ZeroPosition() */
 
 /* Read the currently commanded resistance target in pounds
 ** Parameters:
@@ -236,6 +369,8 @@ float Motor_GetIqCurrent(void)
 void Motor_EmergencyStop(void)
 {
   s_target_resistance_lbs = 0.0f;
+  s_direct_pos_active     = false;
+  s_direct_pos_override_mm = 0.0f;
   s_integral              = 0.0f;
   s_commanded_pos_mm      = 0.0f;
   s_profiled_pos_mm       = 0.0f;
@@ -272,6 +407,17 @@ void Motor_SetInvertedDirection(bool inverted)
 {
   s_dir_inverted = inverted;
 } /* Motor_SetInvertedDirection() */
+
+/* Query if motor direction polarity is currently inverted
+** Parameters:
+**   None
+** Return:
+**   bool: True if inverted
+*/
+bool Motor_IsInvertedDirection(void)
+{
+  return s_dir_inverted;
+} /* Motor_IsInvertedDirection() */
 
 /* Configure microstepping divider (e.g. 1, 4, 8, 16)
 ** Parameters:
@@ -311,8 +457,51 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   /* Low-pass filter load cell force (1st order EMA, fc ~ 10 Hz at 100 Hz dt) to reject ADC noise */
   s_filt_force_lbs += 0.35f * (measured_force_lbs - s_filt_force_lbs);
 
+  /* Calculate angular acceleration from velocity difference */
+  float accel_deg_s2 = (velocity_deg_s - s_prev_velocity_deg_s) / dt_s;
+  s_prev_velocity_deg_s = velocity_deg_s;
+
+  /* ── Descent Drop Arrest Safety Monitor ──
+  ** If the user drops the handle or lets go on descent, velocity plunges rapidly.
+  ** Instantly clamp the brake to halt the drop and protect user from hyperextension. */
+  if ( !s_descent_arrest_active )
+  {
+    bool drop_overspeed  = (velocity_deg_s < s_descent_arrest_thresh_deg_s);
+    bool drop_snap_accel = (velocity_deg_s < -120.0f) && (accel_deg_s2 < -350.0f);
+
+    /* Only trigger drop arrest if system is actively in use / commanded resistance active */
+    if ( (drop_overspeed || drop_snap_accel) && ((s_target_torque_lbf_in > 0.5f) || s_motor_enabled) )
+    {
+      s_descent_arrest_active = true;
+      s_descent_arrest_tick = HAL_GetTick();
+      char alert[64];
+      snprintf(alert, sizeof(alert), "ALERT:DESCENT_ARREST,VEL=%.1f,ACC=%.0f\r\n", velocity_deg_s, accel_deg_s2);
+      Telemetry_SendAck(alert);
+    }
+  }
+
+  /* ── Descent Arrest Lockup Active: Force Caliper Clamping ── */
+  if ( s_descent_arrest_active )
+  {
+    s_commanded_pos_mm = DESCENT_LOCKUP_CLAMP_MM;
+    s_integral = 0.0f;
+
+    /* Auto-release condition: once motion has arrested (|velocity| < 8 deg/s) and held for 1200 ms */
+    if ( (HAL_GetTick() - s_descent_arrest_tick > 1200) && (fabsf(velocity_deg_s) < 8.0f) )
+    {
+      s_descent_arrest_active = false;
+      Telemetry_SendAck("ACK:DESCENT_ARREST:RELEASED\r\n");
+    }
+  }
+  /* When in direct position mode (e.g. during LUT calibration), hold commanded displacement */
+  else if ( s_direct_pos_active )
+  {
+    s_feedforward_pos_mm = s_direct_pos_override_mm;
+    s_commanded_pos_mm   = s_direct_pos_override_mm;
+    s_integral           = 0.0f;
+  }
   /* When resistance is disabled or homed, command carriage to slack home position */
-  if ( (!s_motor_enabled) || (s_target_resistance_lbs <= 0.0f) )
+  else if ( (!s_motor_enabled) || (s_target_torque_lbf_in <= 0.0f) )
   {
     s_feedforward_pos_mm = 0.0f;
     s_commanded_pos_mm   = 0.0f;
@@ -320,10 +509,10 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   }
   else
   {
-    /* 1. Feedforward Position Calculation */
-    s_feedforward_pos_mm = X_SLACK_MM + (s_target_resistance_lbs / K_PLANT_NOMINAL);
+    /* 1. Feedforward Position Calculation from Kinematic Torque Look-Up Table (LUT) */
+    s_feedforward_pos_mm = Brake_LUT_TorqueToPositionMm(s_target_torque_lbf_in);
 
-    /* 2. Closed-Loop Force Error using filtered load cell reading */
+    /* 2. Closed-Loop Force Error using filtered load cell reading at handle */
     float error = s_target_resistance_lbs - s_filt_force_lbs;
 
     /* 3. Deadband Filtering (Rejects chatter and human tremor) */
@@ -367,9 +556,10 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     s_commanded_pos_mm = s_feedforward_pos_mm + trim_mm;
 
     /* Safety clamp within physical mechanism stroke bounds */
-    if ( s_commanded_pos_mm < 0.0f )
+    float min_pos = s_direct_pos_active ? X_MIN_TRAVEL_MM : 0.0f;
+    if ( s_commanded_pos_mm < min_pos )
     {
-      s_commanded_pos_mm = 0.0f;
+      s_commanded_pos_mm = min_pos;
     }
     else if ( s_commanded_pos_mm > X_MAX_TRAVEL_MM )
     {
@@ -414,10 +604,11 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   /* Integrate velocity to advance profiled position */
   s_profiled_pos_mm += (s_current_vel_mm_s * dt_s);
 
-  /* Clamp within mechanical bounds */
-  if ( s_profiled_pos_mm < 0.0f )
+  /* Clamp within mechanical bounds (allow negative displacement in direct calibration mode) */
+  float min_pos = s_direct_pos_active ? X_MIN_TRAVEL_MM : 0.0f;
+  if ( s_profiled_pos_mm < min_pos )
   {
-    s_profiled_pos_mm = 0.0f;
+    s_profiled_pos_mm = min_pos;
     s_current_vel_mm_s = 0.0f;
   }
   else if ( s_profiled_pos_mm > X_MAX_TRAVEL_MM )
@@ -484,7 +675,7 @@ void Motor_StepTask(void)
   if ( s_current_step == s_target_step )
   {
     /* If disabled and carriage has returned completely home to 0, disable driver to keep cool */
-    if ( (!s_motor_enabled) && (s_current_step <= 0) )
+    if ( (!s_motor_enabled) && (!s_direct_pos_active) && (s_current_step == 0) )
     {
       HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_INACTIVE_LEVEL);
     }
@@ -504,14 +695,14 @@ void Motor_StepTask(void)
   int32_t step_delta = 0;
   if ( s_target_step > s_current_step )
   {
-    /* Extend carriage (increase brake cable tension) */
-    HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_RESET : GPIO_PIN_SET);
+    /* Positive step: advance carriage towards brake (tightens brake) */
+    HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_SET : GPIO_PIN_RESET);
     step_delta = 1;
   }
   else
   {
-    /* Retract carriage (release brake cable tension) */
-    HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    /* Negative step: retract carriage away from brake (loosens brake) */
+    HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_RESET : GPIO_PIN_SET);
     step_delta = -1;
   }
 
@@ -595,6 +786,10 @@ bool Motor_SetDriverCurrent(uint16_t run_mA, uint8_t hold_percent)
   s_configured_hold_pct = hold_percent;
   if ( !s_tmc_online )
   {
+    s_tmc_online = TMC2209_Init();
+  }
+  if ( !s_tmc_online )
+  {
     return false;
   }
   return TMC2209_SetCurrent(run_mA, hold_percent);
@@ -635,12 +830,11 @@ bool Motor_SetDriverCoolStep(uint8_t semin, uint8_t semax)
   return TMC2209_ConfigureCoolStep(semin, semax);
 } /* Motor_SetDriverCoolStep() */
 
-static uint8_t  s_homing_sgthrs        = 55;
+static uint8_t  s_homing_sgthrs        = 100;
 static uint32_t s_homing_speed_us      = 350;   /* 350 us step period (~7.1 mm/s / ~54 RPM) */
-static uint32_t s_homing_startup_steps = 1200;  /* Ignore initial 1200 steps (~3 mm / 0.375 rev) */
-static uint32_t s_homing_debounce      = 6;     /* 6 stall pulses to confirm hard endstop */
-static uint16_t s_homing_current_mA    = 1000;  /* 1000 mA soft homing current */
-static char     s_homing_diagnostic[64] = "INIT";
+static uint16_t s_homing_current_mA    = 800;   /* 800 mA gentle homing current */
+static float    s_homing_slack_mm      = 30.0f; /* 30.0 mm backoff clearance from limit switch */
+static char     s_homing_diagnostic[128] = "INIT";
 
 /* Read formatted diagnostic outcome string from last homing operation
 ** Parameters:
@@ -684,6 +878,14 @@ static inline void delay_us(uint32_t us)
 void Motor_SetHomingStallGuardThreshold(uint8_t threshold)
 {
   s_homing_sgthrs = threshold;
+  if ( !s_tmc_online )
+  {
+    s_tmc_online = TMC2209_Init();
+  }
+  if ( s_tmc_online )
+  {
+    TMC2209_ConfigureStallGuard(threshold);
+  }
 } /* Motor_SetHomingStallGuardThreshold() */
 
 /* Read currently configured homing StallGuard4 threshold
@@ -767,6 +969,36 @@ uint16_t Motor_GetHomingCurrentMa(void)
   return s_homing_current_mA;
 } /* Motor_GetHomingCurrentMa() */
 
+/* Program homing standoff clearance / slack distance in mm
+** Parameters:
+**   slack_mm - Distance to back off away from limit switch after contact (0.0 to 50.0 mm)
+** Return:
+**   None
+*/
+void Motor_SetHomingSlackMm(float slack_mm)
+{
+  if ( slack_mm < 0.0f )
+  {
+    slack_mm = 0.0f;
+  }
+  else if ( slack_mm > 50.0f )
+  {
+    slack_mm = 50.0f;
+  }
+  s_homing_slack_mm = slack_mm;
+} /* Motor_SetHomingSlackMm() */
+
+/* Read homing standoff clearance / slack distance in mm
+** Parameters:
+**   None
+** Return:
+**   float: Slack backoff distance in mm
+*/
+float Motor_GetHomingSlackMm(void)
+{
+  return s_homing_slack_mm;
+} /* Motor_GetHomingSlackMm() */
+
 /* Configure StallGuard4 stall sensitivity threshold (0..255)
 ** Parameters:
 **   threshold - Sensitivity value
@@ -784,7 +1016,7 @@ bool Motor_SetDriverStallGuardThreshold(uint8_t threshold)
   return TMC2209_ConfigureStallGuard(threshold);
 } /* Motor_SetDriverStallGuardThreshold() */
 
-/* Check whether physical limit switch (PB12) or TMC2209 DIAG stall output (PB1) is triggered
+/* Check whether physical limit switch (PB13) is triggered
 ** Parameters:
 **   None
 ** Return:
@@ -792,20 +1024,15 @@ bool Motor_SetDriverStallGuardThreshold(uint8_t threshold)
 */
 bool Motor_IsLimitSwitchTriggered(void)
 {
-  /* Physical microswitch on PB12 with pull-up (Active LOW when pressed to GND) */
+  /* Physical microswitch on PB13 with pull-up (Active LOW when pressed to free GND) */
   if ( HAL_GPIO_ReadPin(MOTOR_LIMIT_PORT, MOTOR_LIMIT_PIN) == GPIO_PIN_RESET )
-  {
-    return true;
-  }
-  /* TMC2209 DIAG pin (PB1) goes HIGH when StallGuard4 detects stall / end stop */
-  if ( HAL_GPIO_ReadPin(MOTOR_DIAG_PORT, MOTOR_DIAG_PIN) == GPIO_PIN_SET )
   {
     return true;
   }
   return false;
 } /* Motor_IsLimitSwitchTriggered() */
 
-/* Execute homing: step until limit switch / StallGuard endstop, then back off 5 mm away
+/* Execute homing: step until physical limit switch PB13, then back off 5 mm away
 ** Parameters:
 **   None
 ** Return:
@@ -818,33 +1045,40 @@ bool Motor_Home(void)
   HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_ACTIVE_LEVEL);
   HAL_Delay(10);
 
-  /* Configure homing current, StallGuard threshold, and disable CoolStep during homing */
-  if ( s_tmc_online )
+  /* Ensure TMC2209 UART is online (retry if power was just switched on) */
+  if ( !s_tmc_online )
   {
-    /* Disable CoolStep so dynamic current modulation doesn't destabilize StallGuard */
-    TMC2209_ConfigureCoolStep(0, 0);
-
-    /* Dedicated homing current: s_homing_current_mA (soft contact, prevents violent crashes & keeps driver cool) */
-    TMC2209_SetCurrent(s_homing_current_mA, 50);
-
-    /* Program calibrated homing threshold */
-    TMC2209_ConfigureStallGuard(s_homing_sgthrs);
+    s_tmc_online = TMC2209_Init();
   }
 
-  /* 2. Step in reverse/retract direction to search for end stop / limit switch */
-  int32_t max_search_steps = (int32_t)(50.0f * s_steps_per_mm); /* Search up to 50 mm */
+  /* Configure homing current and smooth StealthChop mode */
+  if ( s_tmc_online )
+  {
+    /* TMC2209 operates in StealthChop2 mode for silent, smooth motion */
+    TMC2209_EnableStealthChop(true);
+
+    /* Dedicated soft homing current: s_homing_current_mA (protects mechanics) */
+    TMC2209_SetCurrent(s_homing_current_mA, 50);
+  }
+
+  /* 2. Step in reverse/retract direction to search for physical limit switch */
+  int32_t max_search_steps = (int32_t)(60.0f * s_steps_per_mm); /* Search up to 60 mm */
   bool end_found = false;
-  int32_t stall_debounce = 0;
   int32_t limit_switch_debounce = 0;
   int32_t stop_step = 0;
   const char *stop_cause = "TIMEOUT";
-  uint16_t min_sg = 1023;
-  uint16_t last_sg = 0;
+
+  /* Check if carriage is ALREADY at physical limit switch before moving */
+  if ( HAL_GPIO_ReadPin(MOTOR_LIMIT_PORT, MOTOR_LIMIT_PIN) == GPIO_PIN_RESET )
+  {
+    end_found = true;
+    stop_cause = "ALREADY_AT_PB13";
+  }
 
   /* Homing search direction (retract / reverse) */
   HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-  for ( int32_t i = 0; i < max_search_steps; i++ )
+  for ( int32_t i = 0; (i < max_search_steps) && !end_found; i++ )
   {
     HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_SET);
     for ( volatile int d = 0; d < 50; d++ )
@@ -855,91 +1089,92 @@ bool Motor_Home(void)
 
     /* Smooth acceleration ramp at start of homing to prevent sudden torque shock */
     uint32_t step_delay = s_homing_speed_us;
-    if ( i < 300 )
+    if ( i < 200 )
     {
-      step_delay = 800 - (((800 - s_homing_speed_us) * i) / 300);
+      step_delay = 800 - (((800 - s_homing_speed_us) * i) / 200);
     }
     delay_us(step_delay);
 
-    /* Ignore initial s_homing_startup_steps (default 1200 steps / 3 mm) while motor accelerates from standstill */
-    if ( i > (int32_t)s_homing_startup_steps )
+    /* Immediate Emergency Stop poll on EVERY step (< 350 us latency) */
+    SystemCommand_t c = Telemetry_PollCommand();
+    if ( c == CMD_STOP )
     {
-      /* 1. Check physical limit switch (PB12 with internal pull-up, active LOW when pressed) */
-      if ( HAL_GPIO_ReadPin(MOTOR_LIMIT_PORT, MOTOR_LIMIT_PIN) == GPIO_PIN_RESET )
-      {
-        limit_switch_debounce++;
-        if ( limit_switch_debounce >= 5 )
-        {
-          end_found = true;
-          stop_cause = "LIMIT_PB12";
-          stop_step = i;
-          break;
-        }
-      }
-      else
-      {
-        limit_switch_debounce = 0;
-      }
+      stop_cause = "ESTOP_COMMANDED";
+      end_found = false;
+      Motor_EmergencyStop();
+      Telemetry_SendAck("ACK:STOP:ESTOP\r\n");
+      return false;
+    }
 
-      /* 2. Check TMC2209 DIAG pin (PB1 goes HIGH when StallGuard4 detects stall) */
-      if ( HAL_GPIO_ReadPin(MOTOR_DIAG_PORT, MOTOR_DIAG_PIN) == GPIO_PIN_SET )
+    /* Physical limit switch PB13: Check at EVERY step (active LOW to GND) */
+    if ( HAL_GPIO_ReadPin(MOTOR_LIMIT_PORT, MOTOR_LIMIT_PIN) == GPIO_PIN_RESET )
+    {
+      limit_switch_debounce++;
+      if ( limit_switch_debounce >= 3 )
       {
-        stall_debounce++;
-        /* s_homing_debounce (default 6 pulses) confirms end stop reached */
-        if ( stall_debounce >= (int32_t)s_homing_debounce )
-        {
-          end_found = true;
-          stop_cause = "STALL_DIAG_PIN";
-          stop_step = i;
-          break;
-        }
+        end_found = true;
+        stop_cause = "LIMIT_PB13";
+        stop_step = i;
+        break;
       }
-      else
-      {
-        if ( stall_debounce > 0 )
-        {
-          stall_debounce--;
-        }
-      }
+    }
+    else
+    {
+      limit_switch_debounce = 0;
     }
   }
 
   HAL_Delay(30);
 
-  /* Query StallGuard diagnostic at end of homing search */
-  if ( s_tmc_online )
+  /* If end stop was not found (timeout or failure), stop immediately and do not back off */
+  if ( !end_found )
   {
-    last_sg = TMC2209_ReadStallGuard();
-    min_sg  = last_sg;
+    Motor_EmergencyStop();
+    snprintf(s_homing_diagnostic, sizeof(s_homing_diagnostic),
+             "CAUSE=%s,STEPS=%ld",
+             stop_cause, (long)max_search_steps);
+    return false;
   }
 
-  /* 3. Move 5 mm AWAY (forward / extend) with smooth trapezoidal ramp */
-  int32_t backoff_steps = (int32_t)lroundf(5.0f * s_steps_per_mm);
+  /* 3. Move s_homing_slack_mm AWAY from limit switch with smooth trapezoidal ramp */
+  int32_t backoff_steps = (int32_t)lroundf(s_homing_slack_mm * s_steps_per_mm);
   /* Opposite of homing search direction */
   HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_RESET : GPIO_PIN_SET);
 
-  for ( int32_t i = 0; i < backoff_steps; i++ )
+  if ( backoff_steps > 0 )
   {
-    HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_SET);
-    for ( volatile int d = 0; d < 50; d++ )
+    for ( int32_t i = 0; i < backoff_steps; i++ )
     {
-      __NOP();
-    }
-    HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
+      /* Immediate Emergency Stop check on every step during backoff */
+      SystemCommand_t c = Telemetry_PollCommand();
+      if ( c == CMD_STOP )
+      {
+        Motor_EmergencyStop();
+        Telemetry_SendAck("ACK:STOP:ESTOP\r\n");
+        return false;
+      }
 
-    uint32_t backoff_delay = s_homing_speed_us;
-    if ( i < 200 )
-    {
-      backoff_delay = 800 - (((800 - s_homing_speed_us) * i) / 200);
+      HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_SET);
+      for ( volatile int d = 0; d < 50; d++ )
+      {
+        __NOP();
+      }
+      HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
+
+      uint32_t backoff_delay = s_homing_speed_us;
+      if ( (backoff_steps > 400) && (i < 200) )
+      {
+        backoff_delay = 800 - (((800 - s_homing_speed_us) * i) / 200);
+      }
+      else if ( (backoff_steps > 400) && (i > (backoff_steps - 200)) )
+      {
+        backoff_delay = s_homing_speed_us + (((800 - s_homing_speed_us) * (i - (backoff_steps - 200))) / 200);
+      }
+      delay_us(backoff_delay);
     }
-    else if ( i > (backoff_steps - 200) )
-    {
-      backoff_delay = s_homing_speed_us + (((800 - s_homing_speed_us) * (i - (backoff_steps - 200))) / 200);
-    }
-    delay_us(backoff_delay);
   }
 
-  /* 4. Calibrate new physical 0.0 mm home at this 5 mm standoff position */
+  /* 4. Calibrate new physical 0.0 mm home at this standoff position */
   s_current_step         = 0;
   s_target_step          = 0;
   s_current_pos_mm       = 0.0f;
@@ -951,16 +1186,14 @@ bool Motor_Home(void)
 
   /* Record detailed diagnostic outcome */
   snprintf(s_homing_diagnostic, sizeof(s_homing_diagnostic),
-           "CAUSE=%s,STEPS=%ld,MIN_SG=%u,LAST_SG=%u",
+           "CAUSE=%s,STEPS=%ld,CLEAR=%.1fMM,POS=0.0",
            stop_cause, (long)(end_found ? stop_step : max_search_steps),
-           min_sg, last_sg);
+           s_homing_slack_mm);
 
-  /* Restore normal operating current, CoolStep, and StallGuard sensitivity */
+  /* Restore normal operating current */
   if ( s_tmc_online )
   {
     TMC2209_SetCurrent(s_configured_run_mA, s_configured_hold_pct);
-    TMC2209_ConfigureCoolStep(2, 5);
-    TMC2209_ConfigureStallGuard(64);
   }
 
   return end_found;

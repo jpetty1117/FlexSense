@@ -45,22 +45,26 @@ class LiveDataGenerator:
         ideal_speed = (self.target_angle / 2.0) * omega * np.sin(omega * t)
         
         # Apply localized injury dip (creates a stall/wobble in ROM, dropping velocity)
-        dip = self.injury_severity * np.exp(-((ideal_rom - self.injury_angle)**2) / (2 * self.injury_width**2))
+        gaussian_injury = np.exp(-((ideal_rom - self.injury_angle)**2) / (2 * self.injury_width**2))
+        dip = self.injury_severity * gaussian_injury
         dip_derivative = -dip * ((ideal_rom - self.injury_angle) / (self.injury_width**2)) * ideal_speed
         
         rom_angle = ideal_rom - dip
         rom_angle += random.gauss(0, 0.3)  # sensor noise
 
-        speed = ideal_speed - dip_derivative
-        speed += random.gauss(0, 5.0)  # sensor noise on velocity
+        # Localized tremor perturbation in velocity near the injury angle
+        tremor_burst = 10.0 * gaussian_injury * np.sin(16.0 * t)
+        speed = ideal_speed - dip_derivative + tremor_burst
+        speed += random.gauss(0, 3.5)  # sensor noise on velocity
 
         # SpO2: slow random walk, clamped to 94-99%
         self.spo2 += random.gauss(0, 0.05)
         self.spo2 = max(94.0, min(99.0, self.spo2))
 
-        # Handle force: nominal target resistance with injury deficit dip
-        force_dip = (self.target_resistance * 0.45) * np.exp(-((ideal_rom - self.injury_angle)**2) / (2 * self.injury_width**2))
-        force_lbs = max(1.0, self.target_resistance - force_dip + random.gauss(0, 0.4))
+        # Handle force: nominal target resistance with localized injury deficit dip and progressive fatigue
+        fatigue_factor = max(0.75, 1.0 - (t / 40.0) * 0.25)
+        force_dip = (self.target_resistance * 0.40) * gaussian_injury
+        force_lbs = max(1.0, (self.target_resistance * fatigue_factor) - force_dip + random.gauss(0, 0.35))
 
         return rom_angle, speed, force_lbs, self.spo2
 

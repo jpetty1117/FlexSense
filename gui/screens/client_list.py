@@ -1,5 +1,5 @@
 """
-Client List screen — displays all clients from the database.
+Client List screen - displays all clients from the database.
 """
 
 from PySide6.QtWidgets import (

@@ -83,6 +83,27 @@ void Telemetry_Init(UART_HandleTypeDef *huart)
   memset(s_cmd_buf, 0, sizeof(s_cmd_buf));
 } /* Telemetry_Init() */
 
+static inline bool is_stop_command(const char *cmd)
+{
+  if ( (strcasecmp(cmd, "STOP") == 0) || (strcasecmp(cmd, "ESTOP") == 0) ||
+       (strcasecmp(cmd, "HALT") == 0) || (strcasecmp(cmd, "KILL") == 0) ||
+       (strcasecmp(cmd, "P") == 0) )
+  {
+    return true;
+  }
+  for ( const char *p = cmd; *p != '\0'; p++ )
+  {
+    if ( ((p[0] == 'S') || (p[0] == 's')) &&
+         ((p[1] == 'T') || (p[1] == 't')) &&
+         ((p[2] == 'O') || (p[2] == 'o')) &&
+         ((p[3] == 'P') || (p[3] == 'p')) )
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 /* Helper to parse a single incoming character into system commands
 ** Parameters:
 **   c - Incoming character
@@ -93,6 +114,13 @@ void Telemetry_Init(UART_HandleTypeDef *huart)
 */
 static SystemCommand_t ProcessIncomingChar(char c)
 {
+  /* Emergency single-byte aborts: ETX (0x03 / Ctrl-C), ESC (0x1B), '!' */
+  if ( (c == 0x03) || (c == 0x1B) || (c == '!') )
+  {
+    s_cmd_idx = 0;
+    return CMD_STOP;
+  }
+
   if ( (c == '\r') || (c == '\n') )
   {
     if ( s_cmd_idx > 0 )
@@ -100,45 +128,94 @@ static SystemCommand_t ProcessIncomingChar(char c)
       s_cmd_buf[s_cmd_idx] = '\0';
       s_cmd_idx = 0;
 
-      if ( (strcasecmp(s_cmd_buf, "START") == 0) || (strcasecmp(s_cmd_buf, "S") == 0) )
+      /* Strip leading whitespace */
+      char *cmd = s_cmd_buf;
+      while ( (*cmd == ' ') || (*cmd == '\t') )
       {
-        return CMD_START;
+        cmd++;
       }
-      else if ( (strcasecmp(s_cmd_buf, "STOP") == 0) || (strcasecmp(s_cmd_buf, "P") == 0) )
+      /* Strip trailing whitespace */
+      int len = (int)strlen(cmd);
+      while ( (len > 0) && ((cmd[len - 1] == ' ') || (cmd[len - 1] == '\t')) )
+      {
+        cmd[--len] = '\0';
+      }
+
+      if ( is_stop_command(cmd) )
       {
         return CMD_STOP;
       }
-      else if ( (strcasecmp(s_cmd_buf, "ZERO") == 0) || (strcasecmp(s_cmd_buf, "Z") == 0) )
+      else if ( (strcasecmp(cmd, "START") == 0) || (strcasecmp(cmd, "S") == 0) )
+      {
+        return CMD_START;
+      }
+      else if ( (strcasecmp(cmd, "ZERO") == 0) || (strcasecmp(cmd, "Z") == 0) )
       {
         return CMD_ZERO;
       }
-      else if ( (strcasecmp(s_cmd_buf, "STATUS") == 0) || (strcasecmp(s_cmd_buf, "?") == 0) )
+      else if ( (strcasecmp(cmd, "ZEROPOS") == 0) || (strcasecmp(cmd, "ZEROMOTOR") == 0) ||
+                (strcasecmp(cmd, "MOTORZERO") == 0) || (strcasecmp(cmd, "MZ") == 0) ||
+                (strcasecmp(cmd, "ZERO_POS") == 0) )
+      {
+        return CMD_ZERO_MOTOR;
+      }
+      else if ( (strcasecmp(cmd, "STATUS") == 0) || (strcasecmp(cmd, "?") == 0) )
       {
         return CMD_STATUS;
       }
-      else if ( strcasecmp(s_cmd_buf, "TMC") == 0 )
+      else if ( strcasecmp(cmd, "TMC") == 0 )
       {
         return CMD_TMC;
       }
-      else if ( strcasecmp(s_cmd_buf, "SPO2") == 0 )
+      else if ( strcasecmp(cmd, "SPO2") == 0 )
       {
         return CMD_SPO2;
       }
-      else if ( (strcasecmp(s_cmd_buf, "HOME") == 0) || (strcasecmp(s_cmd_buf, "H") == 0) )
+      else if ( (strcasecmp(cmd, "RESETARREST") == 0) || (strcasecmp(cmd, "UNARREST") == 0) ||
+                (strcasecmp(cmd, "CLEARARREST") == 0) )
+      {
+        return CMD_RESET_ARREST;
+      }
+      else if ( (strcasecmp(cmd, "HOME") == 0) || (strcasecmp(cmd, "H") == 0) )
       {
         return CMD_HOME;
       }
-      else if ( (strcasecmp(s_cmd_buf, "TARE") == 0) || (strcasecmp(s_cmd_buf, "T") == 0) )
+      else if ( (strcasecmp(cmd, "TARE") == 0) || (strcasecmp(cmd, "T") == 0) )
       {
         return CMD_TARE;
       }
-      else if ( (strcasecmp(s_cmd_buf, "DFU") == 0) || (strcasecmp(s_cmd_buf, "BOOTLOADER") == 0) )
+      else if ( (strcasecmp(cmd, "DFU") == 0) || (strcasecmp(cmd, "BOOTLOADER") == 0) )
       {
         return CMD_DFU;
       }
-      else if ( (strncasecmp(s_cmd_buf, "HOMETHR", 7) == 0) || (strncasecmp(s_cmd_buf, "SGTHR", 5) == 0) )
+      else if ( (strncasecmp(cmd, "DIR", 3) == 0) || (strcasecmp(cmd, "INVERT") == 0) )
       {
-        const char *p = (strncasecmp(s_cmd_buf, "HOMETHR", 7) == 0) ? &s_cmd_buf[7] : &s_cmd_buf[5];
+        const char *p = (strncasecmp(cmd, "DIR", 3) == 0) ? &cmd[3] : &cmd[6];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p == '?' )
+        {
+          s_cmd_param = -2.0f; /* -2 indicates query without toggle */
+        }
+        else if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+        }
+        else if ( strcasecmp(cmd, "INVERT") == 0 )
+        {
+          s_cmd_param = -1.0f; /* -1 indicates toggle */
+        }
+        else
+        {
+          s_cmd_param = -2.0f; /* plain "DIR" queries current direction */
+        }
+        return CMD_SET_DIR;
+      }
+      else if ( (strncasecmp(cmd, "HOMETHR", 7) == 0) || (strncasecmp(cmd, "SGTHR", 5) == 0) )
+      {
+        const char *p = (strncasecmp(cmd, "HOMETHR", 7) == 0) ? &cmd[7] : &cmd[5];
         while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
         {
           p++;
@@ -149,9 +226,9 @@ static SystemCommand_t ProcessIncomingChar(char c)
           return CMD_SET_HOMETHR;
         }
       }
-      else if ( (strncasecmp(s_cmd_buf, "HOMESPEED", 9) == 0) || (strncasecmp(s_cmd_buf, "HSPEED", 6) == 0) )
+      else if ( (strncasecmp(cmd, "HOMESPEED", 9) == 0) || (strncasecmp(cmd, "HSPEED", 6) == 0) )
       {
-        const char *p = (strncasecmp(s_cmd_buf, "HOMESPEED", 9) == 0) ? &s_cmd_buf[9] : &s_cmd_buf[6];
+        const char *p = (strncasecmp(cmd, "HOMESPEED", 9) == 0) ? &cmd[9] : &cmd[6];
         while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
         {
           p++;
@@ -162,9 +239,9 @@ static SystemCommand_t ProcessIncomingChar(char c)
           return CMD_SET_HOMESPEED;
         }
       }
-      else if ( (strncasecmp(s_cmd_buf, "HOMECURR", 8) == 0) || (strncasecmp(s_cmd_buf, "HCURR", 5) == 0) )
+      else if ( (strncasecmp(cmd, "HOMECURR", 8) == 0) || (strncasecmp(cmd, "HCURR", 5) == 0) )
       {
-        const char *p = (strncasecmp(s_cmd_buf, "HOMECURR", 8) == 0) ? &s_cmd_buf[8] : &s_cmd_buf[5];
+        const char *p = (strncasecmp(cmd, "HOMECURR", 8) == 0) ? &cmd[8] : &cmd[5];
         while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
         {
           p++;
@@ -175,10 +252,68 @@ static SystemCommand_t ProcessIncomingChar(char c)
           return CMD_SET_HOMECURR;
         }
       }
-      else if ( (strncasecmp(s_cmd_buf, "RES", 3) == 0) || (strncasecmp(s_cmd_buf, "SET", 3) == 0) )
+      else if ( (strncasecmp(cmd, "HOMESLACK", 9) == 0) || (strncasecmp(cmd, "HSLACK", 6) == 0) || (strncasecmp(cmd, "SLACK", 5) == 0) )
+      {
+        const char *p = (strncasecmp(cmd, "HOMESLACK", 9) == 0) ? &cmd[9] :
+                        (strncasecmp(cmd, "HSLACK", 6) == 0) ? &cmd[6] : &cmd[5];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_HOMESLACK;
+        }
+      }
+      else if ( (strncasecmp(cmd, "TORQUE", 6) == 0) || (strncasecmp(cmd, "TORQ", 4) == 0) )
+      {
+        /* Support "TORQUE 120.0", "TORQ 90.0", "TORQUE:150", etc. (lbf*in) */
+        const char *p = (strncasecmp(cmd, "TORQUE", 6) == 0) ? &cmd[6] : &cmd[4];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_TORQUE;
+        }
+      }
+      else if ( (strncasecmp(cmd, "ARM", 3) == 0) || (strncasecmp(cmd, "FOREARM", 7) == 0) )
+      {
+        /* Support "ARM 12.0", "ARM 9.5", "FOREARM 10.0" (inches) */
+        const char *p = (strncasecmp(cmd, "FOREARM", 7) == 0) ? &cmd[7] : &cmd[3];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_ARM;
+        }
+      }
+      else if ( (strncasecmp(cmd, "ARRESTTHR", 9) == 0) || (strncasecmp(cmd, "DROPTHR", 7) == 0) )
+      {
+        /* Support "ARRESTTHR -160", "DROPTHR 180" (deg/s threshold) */
+        const char *p = (strncasecmp(cmd, "ARRESTTHR", 9) == 0) ? &cmd[9] : &cmd[7];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          float v = (float)strtod(p, (char **)0);
+          if ( v > 0.0f ) v = -v; /* Ensure negative threshold */
+          s_cmd_param = v;
+          return CMD_SET_ARREST_THRESH;
+        }
+      }
+      else if ( (strncasecmp(cmd, "RES", 3) == 0) || (strncasecmp(cmd, "SET", 3) == 0) )
       {
         /* Support "RES 10.5", "RES:10.5", "RES=10.5", "SET 10.5", etc. */
-        const char *p = &s_cmd_buf[3];
+        const char *p = &cmd[3];
         while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
         {
           p++;
@@ -189,10 +324,24 @@ static SystemCommand_t ProcessIncomingChar(char c)
           return CMD_SET_RESISTANCE;
         }
       }
-      else if ( strncasecmp(s_cmd_buf, "CURR", 4) == 0 )
+      else if ( (strncasecmp(cmd, "POS", 3) == 0) || (strncasecmp(cmd, "MOVE", 4) == 0) )
+      {
+        /* Support direct stepper positioning: "POS 6.5", "POS:6.5", "MOVE 12.0", etc. */
+        const char *p = (strncasecmp(cmd, "POS", 3) == 0) ? &cmd[3] : &cmd[4];
+        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
+        {
+          p++;
+        }
+        if ( *p != '\0' )
+        {
+          s_cmd_param = (float)strtod(p, (char **)0);
+          return CMD_SET_POSITION;
+        }
+      }
+      else if ( strncasecmp(cmd, "CURR", 4) == 0 )
       {
         /* Support "CURR 1700", "CURR 1.7", "CURR:1700", etc. */
-        const char *p = &s_cmd_buf[4];
+        const char *p = &cmd[4];
         while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
         {
           p++;

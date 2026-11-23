@@ -1,5 +1,5 @@
 """
-Client Dashboard screen — shows client info (read-only).
+Client Dashboard screen - shows client info (read-only).
 Navigation via sidebar; no action buttons here.
 """
 
@@ -53,20 +53,20 @@ class ClientDashboardScreen(QWidget):
             return lbl
 
         info_layout.addWidget(make_label("Name:", "section_header"), 0, 0)
-        self.lbl_name = make_label("—", "client_info")
+        self.lbl_name = make_label("--", "client_info")
         info_layout.addWidget(self.lbl_name, 0, 1)
 
         info_layout.addWidget(make_label("Date of Birth:", "section_header"), 1, 0)
-        self.lbl_dob = make_label("—", "client_info")
+        self.lbl_dob = make_label("--", "client_info")
         info_layout.addWidget(self.lbl_dob, 1, 1)
 
         info_layout.addWidget(make_label("Notes:", "section_header"), 2, 0)
-        self.lbl_notes = make_label("—", "client_info")
+        self.lbl_notes = make_label("--", "client_info")
         self.lbl_notes.setWordWrap(True)
         info_layout.addWidget(self.lbl_notes, 2, 1)
 
         info_layout.addWidget(make_label("Total Sessions:", "section_header"), 3, 0)
-        self.lbl_sessions = make_label("—", "client_info")
+        self.lbl_sessions = make_label("--", "client_info")
         info_layout.addWidget(self.lbl_sessions, 3, 1)
 
         info_layout.setColumnStretch(1, 1)
@@ -86,7 +86,7 @@ class ClientDashboardScreen(QWidget):
         self.client = self.db.get_client(client_id)
 
         if self.client:
-            self.title_label.setText(f"Client Dashboard — {self.client['name']}")
+            self.title_label.setText(f"Client Dashboard: {self.client['name']}")
             self.lbl_name.setText(self.client["name"])
             self.lbl_dob.setText(self.client.get("dob", "N/A"))
             self.lbl_notes.setText(self.client.get("notes", "No notes"))

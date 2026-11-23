@@ -11,7 +11,7 @@
 #define ENC_B_PIN PA1
 
 volatile long encoderCount = 0;
-const float DEG_PER_COUNT = 360.0f / 2400.0f;
+const float DEG_PER_COUNT = 180.0f / 2400.0f; // 2:1 belt ratio (1 encoder rev = 180 deg curl)
 
 // Lookup table for 4X quadrature states
 // This is the fastest way to determine direction

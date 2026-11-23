@@ -27,6 +27,7 @@ extern "C" {
 #define K_SPRING_NOMINAL            1.25f     /* lbf / mm */
 #define K_PLANT_NOMINAL             (G_BRAKE_NOMINAL * K_SPRING_NOMINAL) /* 2.1875 lbf / mm */
 #define X_SLACK_MM                  2.5f      /* mm of initial carriage take-up */
+#define X_MIN_TRAVEL_MM             -25.0f    /* mm minimum allowed travel for negative calibration & backlash */
 #define X_MAX_TRAVEL_MM             35.0f     /* mm maximum allowed travel */
 
 /* Laplace-Tuned Closed-Loop Feedback Constants */
@@ -62,7 +63,7 @@ extern "C" {
 #define MOTOR_DIAG_PORT             GPIOB
 #define MOTOR_INDEX_PIN             GPIO_PIN_3
 #define MOTOR_INDEX_PORT            GPIOA
-#define MOTOR_LIMIT_PIN             GPIO_PIN_12
+#define MOTOR_LIMIT_PIN             GPIO_PIN_13
 #define MOTOR_LIMIT_PORT            GPIOB
 
 /* Driver enable levels */
@@ -78,7 +79,16 @@ extern "C" {
 /* Public Function Prototypes */
 void     Motor_Init(void);
 void     Motor_SetResistanceLbs(float resistance_lbs);
+void     Motor_SetTorqueLbfIn(float torque_lbf_in);
+void     Motor_SetForearmLengthIn(float arm_in);
+float    Motor_GetForearmLengthIn(void);
+float    Motor_GetTargetTorqueLbfIn(void);
+void     Motor_SetCommandedPositionMm(float pos_mm);
+void     Motor_ZeroPosition(void);
 float    Motor_GetTargetResistanceLbs(void);
+bool     Motor_IsDescentArrestActive(void);
+void     Motor_ResetDescentArrest(void);
+void     Motor_SetDescentArrestThreshold(float max_neg_vel_deg_s);
 float    Motor_GetCommandedPositionMm(void);
 float    Motor_GetCurrentPositionMm(void);
 float    Motor_GetCurrentVelocityMmS(void);
@@ -88,6 +98,7 @@ bool     Motor_IsEnabled(void);
 void     Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float dt_s);
 void     Motor_StepTask(void);
 void     Motor_SetInvertedDirection(bool inverted);
+bool     Motor_IsInvertedDirection(void);
 void     Motor_SetMicrostepping(float ustep_div);
 
 /* TMC2209 Single-Wire UART Features */
@@ -104,6 +115,8 @@ void     Motor_SetHomingSpeedUs(uint32_t speed_us);
 uint32_t Motor_GetHomingSpeedUs(void);
 void     Motor_SetHomingCurrentMa(uint16_t ma);
 uint16_t Motor_GetHomingCurrentMa(void);
+void     Motor_SetHomingSlackMm(float slack_mm);
+float    Motor_GetHomingSlackMm(void);
 bool     Motor_SensorlessHome(void);
 bool     Motor_IsLimitSwitchTriggered(void);
 bool     Motor_Home(void);

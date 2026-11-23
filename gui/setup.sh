@@ -4,7 +4,7 @@
 
 set -e
 
-echo "=== Rehab Test GUI — Environment Setup ==="
+echo "=== Rehab Test GUI - Environment Setup ==="
 
 # Define the local environment path
 VENV_PATH="$HOME/.virtualenvs/rehab_gui"

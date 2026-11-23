@@ -183,9 +183,9 @@ class Database:
 
         # Create dummy clients
         clients = [
-            ("John Martinez", "06-15-1985", "Right bicep tendon repair — isotonic curl rehab, 8 weeks post-op"),
-            ("Sarah Chen", "11-03-1992", "Left elbow flexor strain — bicep curl strengthening program"),
-            ("Robert Williams", "02-28-1978", "Bilateral bicep curl assessment — post-fracture ROM recovery"),
+            ("John Martinez", "06-15-1985", "Right bicep tendon repair: isotonic curl rehab, 8 weeks post-op"),
+            ("Sarah Chen", "11-03-1992", "Left elbow flexor strain: bicep curl strengthening program"),
+            ("Robert Williams", "02-28-1978", "Bilateral bicep curl assessment: post-fracture ROM recovery"),
         ]
 
         for name, dob, notes in clients:
