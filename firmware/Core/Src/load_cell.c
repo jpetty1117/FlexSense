@@ -35,6 +35,11 @@
 #define NAU7802_PU_CR               (1U << 5)    /* Cycle Ready */
 #define NAU7802_PU_AVDDS            (1U << 7)    /* Internal LDO Enable */
 
+/* CTRL1 Bit Definitions */
+#define NAU7802_VLDO_3V0            (0x05U << 3) /* 3.0V LDO: Provides ~300mV clean headroom from 3.3V rail */
+#define NAU7802_VLDO_3V3            (0x04U << 3) /* 3.3V LDO: Subject to dropout on 3.3V MCU supply */
+#define NAU7802_PGA_GAIN_128        (0x07U << 0) /* 128x Programmable Gain Amplifier */
+
 /* CTRL2 Bit Definitions */
 #define NAU7802_CTRL2_CALS          (1U << 2)    /* Calibration Start */
 
@@ -150,19 +155,29 @@ void LoadCell_Init(void)
   s_fail_count = 0;
   s_init_step  = 0;
 
-  /* 1. Probe NAU7802: Check if device ACKs at 0x2A via PU_CTRL read */
-  uint8_t pu_val = 0;
-  bool probed = false;
-  for ( int retry = 0; retry < 5; retry++ )
+  /* 0. Cold-boot settling delay: NAU7802 internal Power-On Reset (POR) takes
+  ** up to 50ms to stabilize after 3.3V rail powers up. Ensure at least 100ms has
+  ** elapsed since MCU boot so NAU7802 digital logic is fully operational. */
+  if ( HAL_GetTick() < 100 )
   {
-    if ( HAL_I2C_Mem_Read(&hi2c1, (uint16_t)NAU7802_I2C_ADDR,
-                          NAU7802_REG_PU_CTRL, I2C_MEMADD_SIZE_8BIT, &pu_val, 1,
-                          10) == HAL_OK )
+    HAL_Delay(100 - HAL_GetTick());
+  }
+
+  /* 1. Clear I2C bus of any hung transactions and re-initialize I2C1 */
+  I2C1_ClearBus();
+  MX_I2C1_Init();
+
+  /* 2. Probe NAU7802: Check if device ACKs at 0x2A address */
+  bool probed = false;
+  for ( int retry = 0; retry < 10; retry++ )
+  {
+    hi2c1.ErrorCode = HAL_I2C_ERROR_NONE;
+    if ( HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, 2, 20) == HAL_OK )
     {
       probed = true;
       break;
     }
-    HAL_Delay(20);
+    HAL_Delay(15);
   }
 
   if ( !probed )
@@ -172,22 +187,24 @@ void LoadCell_Init(void)
     return;
   }
 
-  /* 2. Soft Reset registers */
-  nau7802_set_bit(NAU7802_REG_PU_CTRL, NAU7802_PU_RR);
+  /* 3. Soft Reset registers: Set RR = 1, wait 10ms, then clear RR = 0 */
+  nau7802_write_reg(NAU7802_REG_PU_CTRL, NAU7802_PU_RR);
   HAL_Delay(10);
-  nau7802_clear_bit(NAU7802_REG_PU_CTRL, NAU7802_PU_RR);
+  nau7802_write_reg(NAU7802_REG_PU_CTRL, 0x00);
   HAL_Delay(10);
 
-  /* 3. Power Up Digital and Analog sections, and enable internal LDO (AVDDS = 1) */
+  /* 4. Power Up Digital and Analog sections (PUD = 1, PUA = 1).
+  ** Do NOT assert AVDDS yet: internal LDO must be enabled only after PUR is ready
+  ** and target LDO voltage is configured in CTRL1. */
   if ( !nau7802_write_reg(NAU7802_REG_PU_CTRL,
-                          (uint8_t)(NAU7802_PU_PUD | NAU7802_PU_PUA | NAU7802_PU_AVDDS)) )
+                          (uint8_t)(NAU7802_PU_PUD | NAU7802_PU_PUA)) )
   {
     s_is_ready = false;
     s_init_step = 3;
     return;
   }
 
-  /* 4. Wait for PUR (Power Up Ready) bit with 200ms timeout */
+  /* 5. Wait for PUR (Power Up Ready) bit with 200ms timeout */
   uint32_t start_tick = HAL_GetTick();
   uint8_t pu_status = 0;
   bool pur_ok = false;
@@ -209,29 +226,46 @@ void LoadCell_Init(void)
     return;
   }
 
-  /* 5. Configure LDO to 3.3V and Gain to 128x */
-  nau7802_write_reg(NAU7802_REG_CTRL1, 0x27);
+  /* 6. Configure internal LDO to 3.0V (0x28) and PGA Gain to 128x (0x07) -> 0x2F.
+  ** Operating at 3.0V provides ~300mV clean voltage headroom below the BlackPill's
+  ** 3.3V supply rail, eliminating LDO dropout, power supply ripple, and ADC jitter. */
+  if ( !nau7802_write_reg(NAU7802_REG_CTRL1,
+                          (uint8_t)(NAU7802_VLDO_3V0 | NAU7802_PGA_GAIN_128)) )
+  {
+    s_is_ready = false;
+    s_init_step = 5;
+    return;
+  }
 
-  /* 6. Set Sample Rate to 80 SPS on Channel 1 */
+  /* 7. Enable internal LDO (AVDDS = 1) in PU_CTRL.
+  ** This energizes the AVDD pin (E+ bridge excitation) to regulated 3.0V! */
+  if ( !nau7802_set_bit(NAU7802_REG_PU_CTRL, NAU7802_PU_AVDDS) )
+  {
+    s_is_ready = false;
+    s_init_step = 6;
+    return;
+  }
+
+  /* 8. Wait 200ms for internal LDO excitation output (E+) to ramp up and stabilize */
+  HAL_Delay(200);
+
+  /* 9. Set Sample Rate to 80 SPS on Channel 1 */
   nau7802_write_reg(NAU7802_REG_CTRL2, 0x30);
 
-  /* 7. Turn off CLK_CHP */
+  /* 10. Turn off CLK_CHP */
   uint8_t adc_reg = 0;
   if ( nau7802_read_reg(NAU7802_REG_ADC, &adc_reg) )
   {
     nau7802_write_reg(NAU7802_REG_ADC, (uint8_t)(adc_reg | 0x30));
   }
 
-  /* 8. Enable 330pF decoupling cap on channel 2 */
+  /* 11. Enable 330pF decoupling cap on channel 2 */
   nau7802_set_bit(NAU7802_REG_PGA_PWR, 0x80);
 
-  /* 9. Clear LDOMODE for high DC gain */
+  /* 12. Clear LDOMODE for high DC gain */
   nau7802_clear_bit(NAU7802_REG_PGA, 0x40);
 
-  /* 10. Wait for internal LDO excitation to stabilize */
-  HAL_Delay(200);
-
-  /* 11. Perform AFE calibration with 400ms timeout */
+  /* 13. Perform AFE calibration with 400ms timeout */
   nau7802_set_bit(NAU7802_REG_CTRL2, NAU7802_CTRL2_CALS);
   start_tick = HAL_GetTick();
   while ( (HAL_GetTick() - start_tick) < NAU7802_CAL_TIMEOUT_MS )
@@ -247,7 +281,7 @@ void LoadCell_Init(void)
     HAL_Delay(10);
   }
 
-  /* 12. Start continuous conversion cycles */
+  /* 14. Start continuous conversion cycles */
   nau7802_set_bit(NAU7802_REG_PU_CTRL, NAU7802_PU_CS);
 
   /* Flush and capture baseline reading for tare */
@@ -287,8 +321,11 @@ float LoadCell_ReadForceLbs(void)
     if ( (now - s_reinit_tick) >= 2000 )
     {
       s_reinit_tick = now;
-      MX_I2C1_Init();
-      LoadCell_Init();
+      /* Only attempt full re-init if the device responds to a quick address probe */
+      if ( HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, 1, 5) == HAL_OK )
+      {
+        LoadCell_Init();
+      }
     }
     return 0.0f;
   }
