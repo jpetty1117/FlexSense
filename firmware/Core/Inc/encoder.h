@@ -21,6 +21,7 @@ extern "C" {
 /* Public Constants */
 #define ENCODER_CPR             2400.0f  /* Optical encoder raw counts per revolution (4X decoding on TIM2) */
 #define ENCODER_BELT_RATIO      2.0f     /* 2:1 timing belt ratio (1 encoder rev = 180 deg curl, 2 encoder revs = 360 deg curl) */
+#define ENCODER_POLARITY        (-1)     /* Direction polarity (+1 or -1) so concentric curl UP reads positive deg / deg/s */
 #define ENCODER_DEG_PER_COUNT   (360.0f / (ENCODER_CPR * ENCODER_BELT_RATIO)) /* 180.0f / 2400.0f = 0.075 deg / count */
 
 /* Public Function Prototypes */

@@ -48,6 +48,11 @@ static bool             s_descent_arrest_active = false;
 static uint32_t         s_descent_arrest_tick   = 0;
 static float            s_descent_arrest_thresh_deg_s = -160.0f; /* Deg/s drop trigger */
 static float            s_prev_velocity_deg_s   = 0.0f;
+static bool             s_curl_reversing        = false;
+static uint32_t         s_curl_stopped_ms       = 0;
+static bool             s_limit_was_triggered   = false;
+static uint8_t          s_limit_debounce        = 0;
+static uint8_t          s_limit_release_cnt     = 0;
 #define DESCENT_LOCKUP_CLAMP_MM                 16.0f   /* Clamp carriage forward to halt drop */
 
 /* TMC2209 UART State */
@@ -134,6 +139,11 @@ void Motor_Init(void)
   s_last_step_cycle       = DWT->CYCCNT;
   s_step_interval_cycles  = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
   s_motor_enabled         = false;
+  s_curl_reversing        = false;
+  s_curl_stopped_ms       = 0;
+  s_limit_was_triggered   = Motor_IsLimitSwitchTriggered();
+  s_limit_debounce        = 0;
+  s_limit_release_cnt     = 0;
   s_dir_inverted          = true;  /* Default inverted polarity so homing search retracts towards limit switch */
   s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 } /* Motor_Init() */
@@ -146,7 +156,16 @@ void Motor_Init(void)
 */
 void Motor_SetTorqueLbfIn(float torque_lbf_in)
 {
+  if ( (torque_lbf_in > 0.0f) && Motor_IsLimitSwitchTriggered() )
+  {
+    /* Refuse engaging load while hardware limit switch PB13 is pressed */
+    Motor_EmergencyStop();
+    return;
+  }
+
   s_direct_pos_active = false;
+  s_curl_reversing    = false;
+  s_curl_stopped_ms   = 0;
   if ( torque_lbf_in < 0.0f )
   {
     torque_lbf_in = 0.0f;
@@ -160,6 +179,13 @@ void Motor_SetTorqueLbfIn(float torque_lbf_in)
   if ( s_forearm_length_in > 0.1f )
   {
     s_target_resistance_lbs = torque_lbf_in / s_forearm_length_in;
+  }
+
+  if ( (torque_lbf_in > 0.0f) && (!s_motor_enabled) && (s_current_step == s_target_step) )
+  {
+    /* Ensure trapezoidal ramp always starts from 0 velocity at actual carriage position */
+    s_profiled_pos_mm  = s_current_pos_mm;
+    s_current_vel_mm_s = 0.0f;
   }
 
   if ( torque_lbf_in > 0.0f )
@@ -255,6 +281,13 @@ void Motor_SetDescentArrestThreshold(float max_neg_vel_deg_s)
 */
 void Motor_SetCommandedPositionMm(float pos_mm)
 {
+  if ( Motor_IsLimitSwitchTriggered() )
+  {
+    /* Refuse motion while hardware limit switch PB13 is active */
+    Motor_EmergencyStop();
+    return;
+  }
+
   if ( pos_mm < X_MIN_TRAVEL_MM )
   {
     pos_mm = X_MIN_TRAVEL_MM;
@@ -264,10 +297,18 @@ void Motor_SetCommandedPositionMm(float pos_mm)
     pos_mm = X_MAX_TRAVEL_MM;
   }
 
+  if ( (!s_motor_enabled) && (s_current_step == s_target_step) )
+  {
+    /* Sync profiler origin when waking from idle so velocity ramp always starts at 0 mm/s */
+    s_profiled_pos_mm  = s_current_pos_mm;
+    s_current_vel_mm_s = 0.0f;
+  }
+
   s_direct_pos_override_mm = pos_mm;
   s_direct_pos_active      = true;
   s_commanded_pos_mm       = pos_mm;
   s_target_resistance_lbs  = 0.0f;
+  s_target_torque_lbf_in   = 0.0f;
   s_integral               = 0.0f;
 
   s_motor_enabled = true;
@@ -368,15 +409,20 @@ float Motor_GetIqCurrent(void)
 */
 void Motor_EmergencyStop(void)
 {
-  s_target_resistance_lbs = 0.0f;
-  s_direct_pos_active     = false;
+  s_target_resistance_lbs  = 0.0f;
+  s_target_torque_lbf_in   = 0.0f;
+  s_feedforward_pos_mm     = 0.0f;
+  s_direct_pos_active      = false;
   s_direct_pos_override_mm = 0.0f;
-  s_integral              = 0.0f;
-  s_commanded_pos_mm      = 0.0f;
-  s_profiled_pos_mm       = 0.0f;
-  s_current_vel_mm_s      = 0.0f;
-  s_target_step           = s_current_step; /* Freeze pulse generator immediately */
-  s_motor_enabled         = false;
+  s_descent_arrest_active  = false;
+  s_integral               = 0.0f;
+  s_commanded_pos_mm       = s_current_pos_mm;
+  s_profiled_pos_mm        = s_current_pos_mm;
+  s_current_vel_mm_s       = 0.0f;
+  s_target_step            = s_current_step; /* Freeze pulse generator immediately */
+  s_motor_enabled          = false;
+  s_curl_reversing         = false;
+  s_curl_stopped_ms        = 0;
 
   HAL_GPIO_WritePin(MOTOR_EN_PORT,   MOTOR_EN_PIN,   MOTOR_EN_INACTIVE_LEVEL);
   HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
@@ -490,6 +536,8 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     if ( (HAL_GetTick() - s_descent_arrest_tick > 1200) && (fabsf(velocity_deg_s) < 8.0f) )
     {
       s_descent_arrest_active = false;
+      s_curl_reversing        = false;
+      s_curl_stopped_ms       = 0;
       Telemetry_SendAck("ACK:DESCENT_ARREST:RELEASED\r\n");
     }
   }
@@ -506,78 +554,137 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     s_feedforward_pos_mm = 0.0f;
     s_commanded_pos_mm   = 0.0f;
     s_integral           = 0.0f;
+    s_curl_reversing     = false;
+    s_curl_stopped_ms    = 0;
   }
   else
   {
-    /* 1. Feedforward Position Calculation from Kinematic Torque Look-Up Table (LUT) */
-    s_feedforward_pos_mm = Brake_LUT_TorqueToPositionMm(s_target_torque_lbf_in);
-
-    /* 2. Closed-Loop Force Error using filtered load cell reading at handle */
-    float error = s_target_resistance_lbs - s_filt_force_lbs;
-
-    /* 3. Deadband Filtering (Rejects chatter and human tremor) */
-    float error_eff = 0.0f;
-    if ( fabsf(error) > FORCE_DEADBAND_LBS )
+    /* Detect curl reversal (eccentric lowering phase: negative angular velocity) and release brake.
+    ** Hysteresis + 200ms standstill settle prevent chatter; Descent Drop Arrest above still catches drops. */
+    if ( velocity_deg_s < -8.0f )
     {
-      if ( error > 0.0f )
+      s_curl_reversing  = true;
+      s_curl_stopped_ms = 0;
+    }
+    else if ( s_curl_reversing )
+    {
+      if ( velocity_deg_s > 5.0f )
       {
-        error_eff = error - FORCE_DEADBAND_LBS;
+        s_curl_reversing  = false;
+        s_curl_stopped_ms = 0;
+      }
+      else if ( fabsf(velocity_deg_s) < 3.0f )
+      {
+        uint32_t now_ms = HAL_GetTick();
+        if ( s_curl_stopped_ms == 0 )
+        {
+          s_curl_stopped_ms = now_ms;
+        }
+        else if ( (now_ms - s_curl_stopped_ms) >= 200 )
+        {
+          s_curl_reversing  = false;
+          s_curl_stopped_ms = 0;
+        }
       }
       else
       {
-        error_eff = error + FORCE_DEADBAND_LBS;
+        s_curl_stopped_ms = 0;
       }
     }
 
-    /* 4. Motion Gating */
-    bool is_moving = (fabsf(velocity_deg_s) > VELOCITY_GATE_DEG_S);
-    bool is_loaded = (s_filt_force_lbs > FORCE_GATE_LBS);
-
-    if ( is_moving || is_loaded )
+    if ( s_curl_reversing )
     {
-      s_integral += (error_eff * dt_s);
+      /* Release brake cleanly during eccentric / return half of the curl */
+      s_feedforward_pos_mm = 0.0f;
+      s_commanded_pos_mm   = 0.0f;
+      s_integral           = 0.0f;
+    }
+    else
+    {
+      /* 1. Feedforward Position Calculation from Kinematic Torque Look-Up Table (LUT) */
+      s_feedforward_pos_mm = Brake_LUT_TorqueToPositionMm(s_target_torque_lbf_in);
 
-      /* Anti-windup clamping on integral trim */
-      float max_integral = INTEGRAL_MAX_TRIM_MM / KI_FORCE;
-      if ( s_integral > max_integral )
+      /* 2. Closed-Loop Force Error using filtered load cell reading at handle */
+      float error = s_target_resistance_lbs - s_filt_force_lbs;
+
+      /* 3. Deadband Filtering (Rejects chatter and human tremor) */
+      float error_eff = 0.0f;
+      if ( fabsf(error) > FORCE_DEADBAND_LBS )
       {
-        s_integral = max_integral;
+        if ( error > 0.0f )
+        {
+          error_eff = error - FORCE_DEADBAND_LBS;
+        }
+        else
+        {
+          error_eff = error + FORCE_DEADBAND_LBS;
+        }
       }
-      else if ( s_integral < -max_integral )
+
+      /* 4. Motion Gating */
+      bool is_moving = (fabsf(velocity_deg_s) > VELOCITY_GATE_DEG_S);
+      bool is_loaded = (s_filt_force_lbs > FORCE_GATE_LBS);
+
+      if ( is_moving || is_loaded )
       {
-        s_integral = -max_integral;
+        s_integral += (error_eff * dt_s);
+
+        /* Anti-windup clamping on integral trim */
+        float max_integral = INTEGRAL_MAX_TRIM_MM / KI_FORCE;
+        if ( s_integral > max_integral )
+        {
+          s_integral = max_integral;
+        }
+        else if ( s_integral < -max_integral )
+        {
+          s_integral = -max_integral;
+        }
       }
-    }
 
-    /* 5. Laplace-Derived PI Feedback Trim */
-    float trim_mm = (KP_FORCE * error_eff) + (KI_FORCE * s_integral);
+      /* 5. Laplace-Derived PI Feedback Trim */
+      float trim_mm = (KP_FORCE * error_eff) + (KI_FORCE * s_integral);
 
-    /* 6. Total Commanded Carriage Position */
-    s_commanded_pos_mm = s_feedforward_pos_mm + trim_mm;
+      /* 6. Total Commanded Carriage Position */
+      s_commanded_pos_mm = s_feedforward_pos_mm + trim_mm;
 
-    /* Safety clamp within physical mechanism stroke bounds */
-    float min_pos = s_direct_pos_active ? X_MIN_TRAVEL_MM : 0.0f;
-    if ( s_commanded_pos_mm < min_pos )
-    {
-      s_commanded_pos_mm = min_pos;
-    }
-    else if ( s_commanded_pos_mm > X_MAX_TRAVEL_MM )
-    {
-      s_commanded_pos_mm = X_MAX_TRAVEL_MM;
+      /* Safety clamp within physical mechanism stroke bounds */
+      float min_pos = s_direct_pos_active ? X_MIN_TRAVEL_MM : 0.0f;
+      if ( s_commanded_pos_mm < min_pos )
+      {
+        s_commanded_pos_mm = min_pos;
+      }
+      else if ( s_commanded_pos_mm > X_MAX_TRAVEL_MM )
+      {
+        s_commanded_pos_mm = X_MAX_TRAVEL_MM;
+      }
     }
   }
 
   /* 7. Trapezoidal Acceleration & Deceleration Profiler (Smooth motion ramp) */
+  float slew_v_max = s_descent_arrest_active ? ARREST_SLEW_VELOCITY_MM_S : MAX_SLEW_VELOCITY_MM_S;
+  float accel_max  = s_descent_arrest_active ? ARREST_ACCELERATION_MM_S2 : MAX_ACCELERATION_MM_S2;
+
+  /* Prevent profiler from drifting > 0.5 mm ahead of actual stepper position */
+  float lag_mm = s_profiled_pos_mm - s_current_pos_mm;
+  if ( lag_mm > 0.5f )
+  {
+    s_profiled_pos_mm = s_current_pos_mm + 0.5f;
+  }
+  else if ( lag_mm < -0.5f )
+  {
+    s_profiled_pos_mm = s_current_pos_mm - 0.5f;
+  }
+
   float pos_err = s_commanded_pos_mm - s_profiled_pos_mm;
   float desired_vel = 0.0f;
 
   if ( fabsf(pos_err) > 0.005f )
   {
     /* Calculate stopping speed: v_max_decel = sqrt(2 * a * d) */
-    float max_reachable_vel = sqrtf(2.0f * MAX_ACCELERATION_MM_S2 * fabsf(pos_err));
-    if ( max_reachable_vel > MAX_SLEW_VELOCITY_MM_S )
+    float max_reachable_vel = sqrtf(2.0f * accel_max * fabsf(pos_err));
+    if ( max_reachable_vel > slew_v_max )
     {
-      max_reachable_vel = MAX_SLEW_VELOCITY_MM_S;
+      max_reachable_vel = slew_v_max;
     }
     desired_vel = (pos_err > 0.0f) ? max_reachable_vel : -max_reachable_vel;
   }
@@ -586,8 +693,8 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     desired_vel = 0.0f;
   }
 
-  /* Limit acceleration (dv/dt <= MAX_ACCELERATION_MM_S2) */
-  float max_v_step = MAX_ACCELERATION_MM_S2 * dt_s;
+  /* Limit acceleration (dv/dt <= accel_max) */
+  float max_v_step = accel_max * dt_s;
   if ( desired_vel > (s_current_vel_mm_s + max_v_step) )
   {
     s_current_vel_mm_s += max_v_step;
@@ -626,37 +733,31 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
   {
     abs_vel = MIN_SLEW_VELOCITY_MM_S; /* Smooth settling crawl */
   }
-
-  if ( abs_vel >= 0.1f )
+  else if ( abs_vel < 0.1f )
   {
-    float step_rate_hz = abs_vel * s_steps_per_mm;
-    uint32_t cycles = (uint32_t)((float)SystemCoreClock / step_rate_hz);
-    uint32_t min_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
-    if ( cycles < min_cycles )
-    {
-      cycles = min_cycles;
-    }
-    s_step_interval_cycles = cycles;
-  }
-  else
-  {
-    s_step_interval_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
+    abs_vel = MIN_SLEW_VELOCITY_MM_S; /* Never jump to 100 us max speed from standstill */
   }
 
-  /* 9. Periodic TMC2209 Health Diagnostics (polled only when motor is idle or on hardware fault) */
+  float step_rate_hz = abs_vel * s_steps_per_mm;
+  uint32_t cycles = (uint32_t)((float)SystemCoreClock / step_rate_hz);
+  uint32_t min_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
+  if ( cycles < min_cycles )
+  {
+    cycles = min_cycles;
+  }
+  s_step_interval_cycles = cycles;
+
+  /* 9. Periodic TMC2209 Health Diagnostics (ONLY when stationary so UART never stalls active ramps) */
   static uint8_t s_tmc_check_cnt = 0;
   s_tmc_check_cnt++;
-  if ( s_tmc_online && (s_tmc_check_cnt >= 20) )
+  if ( s_tmc_online && (s_tmc_check_cnt >= 20) && (s_current_step == s_target_step) )
   {
     s_tmc_check_cnt = 0;
-    if ( (s_current_step == s_target_step) || (HAL_GPIO_ReadPin(MOTOR_DIAG_PORT, MOTOR_DIAG_PIN) == GPIO_PIN_SET) )
+    if ( TMC2209_ReadStatus(&s_tmc_status) )
     {
-      if ( TMC2209_ReadStatus(&s_tmc_status) )
+      if ( s_tmc_status.driver_fault )
       {
-        if ( s_tmc_status.driver_fault )
-        {
-          Motor_EmergencyStop();
-        }
+        Motor_EmergencyStop();
       }
     }
   }
@@ -672,6 +773,12 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
 */
 void Motor_StepTask(void)
 {
+  /* Hard hardware limit switch guard: halt stepping instantaneously if PB13 is active */
+  if ( Motor_IsLimitSwitchTriggered() )
+  {
+    return;
+  }
+
   if ( s_current_step == s_target_step )
   {
     /* If disabled and carriage has returned completely home to 0, disable driver to keep cool */
@@ -1032,6 +1139,47 @@ bool Motor_IsLimitSwitchTriggered(void)
   return false;
 } /* Motor_IsLimitSwitchTriggered() */
 
+/* Poll hardware limit switch PB13 during normal operation as an E-Stop edge trigger.
+** Parameters:
+**   None
+** Return:
+**   bool: True on the rising event when switch was hit (caller cancels run & homes)
+** Notes:
+**   Latches while switch stays held down so a stuck switch cannot infinite-loop homing.
+*/
+bool Motor_ServiceLimitEstop(void)
+{
+  if ( Motor_IsLimitSwitchTriggered() )
+  {
+    s_limit_release_cnt = 0;
+    if ( !s_limit_was_triggered )
+    {
+      s_limit_debounce++;
+      if ( s_limit_debounce >= 3U )
+      {
+        s_limit_was_triggered = true;
+        s_limit_debounce      = 0;
+        Motor_EmergencyStop();
+        return true;
+      }
+    }
+  }
+  else
+  {
+    s_limit_debounce = 0;
+    if ( s_limit_was_triggered )
+    {
+      s_limit_release_cnt++;
+      if ( s_limit_release_cnt >= 5U )
+      {
+        s_limit_was_triggered = false;
+        s_limit_release_cnt   = 0;
+      }
+    }
+  }
+  return false;
+} /* Motor_ServiceLimitEstop() */
+
 /* Execute homing: step until physical limit switch PB13, then back off 5 mm away
 ** Parameters:
 **   None
@@ -1174,15 +1322,28 @@ bool Motor_Home(void)
     }
   }
 
-  /* 4. Calibrate new physical 0.0 mm home at this standoff position */
-  s_current_step         = 0;
-  s_target_step          = 0;
-  s_current_pos_mm       = 0.0f;
-  s_profiled_pos_mm      = 0.0f;
-  s_commanded_pos_mm     = 0.0f;
-  s_current_vel_mm_s     = 0.0f;
-  s_integral             = 0.0f;
-  s_step_interval_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
+  /* 4. Calibrate new physical 0.0 mm home at this standoff position & clear prior active targets
+  ** so stale resistance/torque/position setpoints from Live Test cannot re-engage after homing. */
+  s_current_step           = 0;
+  s_target_step            = 0;
+  s_current_pos_mm         = 0.0f;
+  s_profiled_pos_mm        = 0.0f;
+  s_commanded_pos_mm       = 0.0f;
+  s_feedforward_pos_mm     = 0.0f;
+  s_current_vel_mm_s       = 0.0f;
+  s_integral               = 0.0f;
+  s_target_resistance_lbs  = 0.0f;
+  s_target_torque_lbf_in   = 0.0f;
+  s_direct_pos_active      = false;
+  s_direct_pos_override_mm = 0.0f;
+  s_descent_arrest_active  = false;
+  s_curl_reversing         = false;
+  s_curl_stopped_ms        = 0;
+  s_motor_enabled          = false;
+  s_limit_debounce         = 0;
+  s_limit_release_cnt      = 0;
+  s_limit_was_triggered    = Motor_IsLimitSwitchTriggered();
+  s_step_interval_cycles   = (uint32_t)((float)SystemCoreClock / (MIN_SLEW_VELOCITY_MM_S * s_steps_per_mm));
 
   /* Record detailed diagnostic outcome */
   snprintf(s_homing_diagnostic, sizeof(s_homing_diagnostic),

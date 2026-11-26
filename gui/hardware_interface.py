@@ -194,21 +194,12 @@ class STM32EncoderInterface:
             except Exception:
                 pass
         self.rx_buffer.clear()
+        self.rx_text_lines.clear()
         self.last_timestamp_ms = 0
         self.send_command("ZERO")
-        time.sleep(0.02)
         if target_resistance is not None:
             self.set_resistance(target_resistance)
-            time.sleep(0.02)
         self.send_command("START")
-        time.sleep(0.01)
-        # Clear any echo/command ACK bytes so binary framing starts clean
-        if self.ser and self.ser.is_open:
-            try:
-                self.ser.reset_input_buffer()
-            except Exception:
-                pass
-        self.rx_buffer.clear()
         self.is_streaming = True
         return True
 
@@ -244,18 +235,26 @@ class STM32EncoderInterface:
         return False
 
     def _extract_ascii_from_bytes(self, raw: bytes):
-        """Extract complete newline-delimited ASCII text lines from buffer."""
+        """Validate and extract complete printable ASCII lines without leaking binary noise."""
         if not raw:
             return
-        try:
-            text = raw.decode("utf-8", errors="ignore")
-            for line in text.splitlines():
-                line = line.strip()
-                # Keep lines that have at least some printable letters/digits (ignores binary noise)
-                if line and any(c.isalnum() for c in line):
-                    self.rx_text_lines.append(line)
-        except Exception:
-            pass
+        for raw_line in raw.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            if all(32 <= b <= 126 or b == 9 for b in stripped):
+                text = stripped.decode("ascii").strip()
+                if text and any(c.isalnum() for c in text):
+                    self.rx_text_lines.append(text)
+                continue
+            # Recover a clean ACK/ALERT suffix if pre-sync binary noise preceded it
+            for prefix in (b"ACK:", b"ALERT:"):
+                pidx = stripped.rfind(prefix)
+                if pidx != -1:
+                    suffix = stripped[pidx:]
+                    if all(32 <= b <= 126 or b == 9 for b in suffix):
+                        self.rx_text_lines.append(suffix.decode("ascii").strip())
+                        break
 
     def read_text_lines(self):
         """Return and clear newly arrived ASCII lines from MCU."""
@@ -295,49 +294,39 @@ class STM32EncoderInterface:
                 if chunk:
                     self.rx_buffer.extend(chunk)
 
-            # 1. First extract any complete ASCII lines before any binary preamble (or if no preamble exists)
-            while True:
-                idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
-                limit = idx if idx != -1 else len(self.rx_buffer)
-                nl_idx = self.rx_buffer[:limit].rfind(b"\n")
-                if nl_idx != -1:
-                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:nl_idx + 1]))
+            # Strict left-to-right framing: wait on torn lines/packets, never re-inject parsed bytes
+            while self.rx_buffer:
+                pkt_idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
+                nl_idx = self.rx_buffer.find(b"\n")
+
+                if pkt_idx == -1 and nl_idx == -1:
+                    if len(self.rx_buffer) > 512:
+                        # Preserve final byte in case 0xAA arrived alone before 0x55
+                        del self.rx_buffer[:-1]
+                    break
+
+                # Complete '\n'-delimited ASCII line precedes any 0xAA 0x55 packet preamble
+                if nl_idx != -1 and (pkt_idx == -1 or nl_idx < pkt_idx):
+                    raw_line = bytes(self.rx_buffer[:nl_idx + 1])
                     del self.rx_buffer[:nl_idx + 1]
-                elif idx > 0 and nl_idx == -1:
-                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:idx]))
-                    del self.rx_buffer[:idx]
-                else:
-                    break
+                    self._extract_ascii_from_bytes(raw_line)
+                    continue
 
-            # 2. Slide window to find 0xAA 0x55 preamble and extract packets
-            while len(self.rx_buffer) >= self.PACKET_SIZE:
-                idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
-                if idx == -1:
-                    nl_idx = self.rx_buffer.rfind(b"\n")
-                    if nl_idx != -1:
-                        self._extract_ascii_from_bytes(bytes(self.rx_buffer[:nl_idx + 1]))
-                        del self.rx_buffer[:nl_idx + 1]
-                    elif len(self.rx_buffer) > 256:
-                        self._extract_ascii_from_bytes(bytes(self.rx_buffer))
-                        del self.rx_buffer[:]
-                    break
+                # Misaligned/pre-sync bytes precede 0xAA 0x55 with no '\n'; discard to align packet
+                if pkt_idx > 0:
+                    del self.rx_buffer[:pkt_idx]
+                    continue
 
-                if idx > 0:
-                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:idx]))
-                    del self.rx_buffer[:idx]
-
+                # Preamble 0xAA 0x55 is at index 0: wait for all 28 bytes before unpacking
                 if len(self.rx_buffer) < self.PACKET_SIZE:
                     break
 
-                # Extract candidate 28-byte packet
                 pkt_bytes = bytes(self.rx_buffer[:self.PACKET_SIZE])
-                del self.rx_buffer[:self.PACKET_SIZE]
-
-                # Verify CRC16-CCITT across bytes 0..25
                 expected_crc = struct.unpack("<H", pkt_bytes[-2:])[0]
                 calculated_crc = compute_crc16(pkt_bytes[:-2])
 
                 if calculated_crc == expected_crc:
+                    del self.rx_buffer[:self.PACKET_SIZE]
                     self.packets_received += 1
                     p0, p1, t_ms, angle, vel, load, iq, spo2, crc = struct.unpack(
                         self.PACKET_FORMAT, pkt_bytes
@@ -350,20 +339,11 @@ class STM32EncoderInterface:
                     self.last_motor_iq = iq
                     self.last_spo2 = spo2
 
-                    # Return formatted sample tuple
                     samples.append((t_ms, 0, angle, vel, load, iq, spo2))
                 else:
+                    # CRC error: advance by 1 byte in-place to re-sync past false preamble
                     self.crc_errors += 1
-
-            # 3. Extract any trailing ASCII lines left after packets
-            nl_idx = self.rx_buffer.rfind(b"\n")
-            if nl_idx != -1:
-                idx = self.rx_buffer.find(self.PACKET_PREAMBLE)
-                if idx == -1 or nl_idx < idx:
-                    self._extract_ascii_from_bytes(bytes(self.rx_buffer[:nl_idx + 1]))
-                    del self.rx_buffer[:nl_idx + 1]
-                    # CRC error: preamble was a false positive, advance by 1 byte to re-sync
-                    self.rx_buffer = bytearray(pkt_bytes[1:]) + self.rx_buffer
+                    del self.rx_buffer[:1]
 
         except Exception:
             # Device reset (NRST) or USB disconnected: cleanly close file descriptor to allow re-enumeration

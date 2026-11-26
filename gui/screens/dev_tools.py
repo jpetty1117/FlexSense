@@ -77,21 +77,25 @@ class DevToolsScreen(QWidget):
 
         self._build_ui()
         self._setup_telemetry_timer()
-        self._probe_hardware()
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not self.timer.isActive():
+            self.timer.start()
         if not self.hw.is_connected:
             self._probe_hardware()
         elif not getattr(self.hw, 'is_streaming', False):
             self.hw.start_streaming()
-        # Query current motor direction polarity, driver status, and forearm setting
+        # Query current motor direction polarity, sensor health, and forearm setting
         self._send_raw_command("DIR?")
         self._send_raw_command("TMC")
+        self._send_raw_command("PINGLC")
         self._send_raw_command(f"ARM {self.forearm_length_in:.1f}")
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        if hasattr(self, 'timer') and self.timer.isActive():
+            self.timer.stop()
         if self.hw and self.hw.is_connected and getattr(self.hw, 'is_streaming', False):
             self.hw.stop_streaming()
 
@@ -338,6 +342,13 @@ class DevToolsScreen(QWidget):
         btn_t_lc.setStyleSheet(self._secondary_btn_style(COLORS['warning']))
         btn_t_lc.clicked.connect(lambda: self._send_raw_command("TARE"))
         row_bar.addWidget(btn_t_lc)
+
+        btn_ping_lc = QPushButton("🔍 Ping NAU7802")
+        btn_ping_lc.setFixedHeight(24)
+        btn_ping_lc.setCursor(Qt.PointingHandCursor)
+        btn_ping_lc.setStyleSheet(self._secondary_btn_style(COLORS['accent_cyan']))
+        btn_ping_lc.clicked.connect(lambda: self._send_raw_command("PINGLC"))
+        row_bar.addWidget(btn_ping_lc)
 
         btn_q_tmc = QPushButton("🔍 Query TMC2209")
         btn_q_tmc.setFixedHeight(24)
@@ -1067,7 +1078,7 @@ class DevToolsScreen(QWidget):
         row_in.setSpacing(5)
 
         self.input_cmd = QLineEdit()
-        self.input_cmd.setPlaceholderText("Enter command (e.g. POS 5.0, RES 10, TORQ 120, ARM 12, HOME)...")
+        self.input_cmd.setPlaceholderText("Enter command (e.g. POS 5.0, RES 10, TORQ 120, ARM 12, HOME, PINGLC, HELP)...")
         self.input_cmd.setStyleSheet(self._input_style())
         self.input_cmd.returnPressed.connect(self._on_cmd_enter)
         row_in.addWidget(self.input_cmd, stretch=1)
@@ -1164,11 +1175,9 @@ class DevToolsScreen(QWidget):
         torque = val * self.forearm_length_in
         self._update_torque_and_displacement_preview()
 
-        # Transmit forearm length first, then commanded resistance
+        # Transmit forearm length first, then commanded resistance once
         self._send_raw_command(f"ARM {self.forearm_length_in:.1f}")
-        self._send_raw_command(f"RES {val:.1f}")
-        if self.hw and self.hw.is_connected:
-            self.hw.set_resistance(val)
+        self._send_raw_command(f"RES {val:.2f}")
         self._log_terminal(f"Commanded Load: {val:.1f} lbs @ {self.forearm_length_in:.0f}\" (Torque: {torque:.1f} lbf·in)")
 
     # ─────────────────────────────────────────────────────────
@@ -1176,9 +1185,6 @@ class DevToolsScreen(QWidget):
     # ─────────────────────────────────────────────────────────
     def _emergency_stop_clicked(self):
         self._send_raw_command("STOP")
-        if self.hw and self.hw.is_connected:
-            self.hw.send_command("STOP")
-            self.hw.is_streaming = False
         self._log_terminal("🛑 EMERGENCY STOP: Sent STOP to STM32. Motor driver disabled immediately.")
 
     def _toggle_motor_dir(self):
@@ -1414,9 +1420,8 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
     # ─────────────────────────────────────────────────────────
     def _setup_telemetry_timer(self):
         self.timer = QTimer(self)
-        self.timer.setInterval(20)  # 50 Hz UI refresh
+        self.timer.setInterval(20)  # 50 Hz UI refresh (started on showEvent)
         self.timer.timeout.connect(self._update_telemetry)
-        self.timer.start()
 
     def _probe_hardware(self):
         if not self.hw.is_connected:
@@ -1425,9 +1430,10 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
                 port_name = getattr(self.hw, 'port', None) or "/dev/ttyACM0"
                 self._log_terminal(f"Hardware probe: Connected to {port_name}")
                 self.hw.start_streaming()
-                # Query MCU direction state, TMC status, and sync forearm setting
+                # Query MCU direction state, sensor health, and sync forearm setting
                 self._send_raw_command("DIR?")
                 self._send_raw_command("TMC")
+                self._send_raw_command("PINGLC")
                 self._send_raw_command(f"ARM {self.forearm_length_in:.1f}")
             else:
                 self._log_terminal("Hardware probe: No device found on serial ports.")
@@ -1466,7 +1472,8 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
                 self.live_timestamp_ms = int(last_s[0])
                 self.live_angle = float(last_s[2])
                 self.live_speed = float(last_s[3])
-                self.live_force = max(0.0, float(last_s[4]))
+                # Show signed load cell value on Dev page (do not silently hide negative polarity at 0.0)
+                self.live_force = float(last_s[4])
                 self.live_carriage_mm = float(last_s[5])
                 self.live_spo2 = float(last_s[6]) if len(last_s) > 6 else 98.0
 
@@ -1479,7 +1486,7 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
 
         # Compute live shaft torque from load cell force and current forearm setting
         self.live_torque = self.live_force * self.forearm_length_in
-        if self.chk_auto_peak.isChecked() and self.live_torque > self.peak_curl_torque:
+        if self.chk_auto_peak.isChecked() and abs(self.live_torque) > abs(self.peak_curl_torque):
             self.peak_curl_torque = self.live_torque
             self.peak_curl_force = self.live_force
 
@@ -1514,6 +1521,9 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             min_t = max(0.0, t_list[-1] - 3.0)
             max_t = max(3.0, t_list[-1])
             self.plot_strip.setXRange(min_t, max_t, padding=0)
+            y_min = min(0.0, min(f_list) - 1.0)
+            y_max = max(25.0, max(f_list) + 2.0)
+            self.plot_strip.setYRange(y_min, y_max, padding=0)
             self.curve_strip_force.setData(t_list, f_list)
             self.line_strip_peak.setValue(self.peak_curl_force)
 
@@ -1521,15 +1531,20 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
         self._log_terminal(f"TX -> {cmd_str}")
         if self.hw and self.hw.is_connected:
             self.hw.send_command(cmd_str)
-            if cmd_str == "START":
+            cmd_upper = cmd_str.strip().upper()
+            if cmd_upper in ("START", "S"):
                 self.hw.is_streaming = True
-            elif cmd_str == "STOP":
+            elif cmd_upper in ("STOP", "ESTOP", "HALT", "KILL", "P"):
                 self.hw.is_streaming = False
         else:
             self._log_terminal(f"[SIMULATION] Mocking response for: {cmd_str}")
 
     def _handle_mcu_response(self, line: str):
-        if "ALERT:DESCENT_ARREST" in line:
+        if "ALERT:LIMIT_ESTOP" in line or "ACK:STOP:LIMIT_ESTOP" in line:
+            self.lbl_homing_status.setText("🛑 Limit Switch PB13 Hit -> Cancelled & Returning Home to 0.0 mm")
+            self.lbl_homing_status.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; font-size: 11px;")
+            self._log_terminal(f"🛑 [HARDWARE LIMIT E-STOP] {line.strip()} - Everything cancelled, returning to 30 mm slack home.")
+        elif "ALERT:DESCENT_ARREST" in line:
             self.lbl_arrest_banner.setVisible(True)
             self.lbl_arrest_banner.setText(f"🛑 DESCENT DROP ARREST ENGAGED: Rapid drop detected! Brake locked forward to halt handle.")
             self._log_terminal(f"⚠️ [SAFETY ALERT] {line.strip()} - Descent drop arrest triggered! Brake locked.")
@@ -1545,6 +1560,31 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             is_ok = ("SUCCESS" in diag) or ("OK" in diag and "TIMEOUT" not in diag and "FAILED" not in diag)
             self.lbl_homing_status.setText(f"Last Homing: {'SUCCESS' if is_ok else 'FAILED'} {diag}")
             self.lbl_homing_status.setStyleSheet(f"color: {COLORS['accent'] if is_ok else COLORS['danger']}; font-weight: bold; font-size: 11px;")
+            if is_ok:
+                self.spin_stepper_pos.blockSignals(True)
+                self.slider_stepper_pos.blockSignals(True)
+                self.spin_stepper_pos.setValue(0.0)
+                self.slider_stepper_pos.setValue(0)
+                self.spin_stepper_pos.blockSignals(False)
+                self.slider_stepper_pos.blockSignals(False)
+                self.lbl_curr_pos.setText("0.0 mm")
+                self.lbl_hud_pos_val.setText("0.0 mm")
+                self.line_curr_pos.setValue(0.0)
+        elif "ACK:TARE:" in line:
+            self._log_terminal("[NAU7802] Load cell tared to 0.0 lbs.")
+        elif "ACK:LC:" in line:
+            payload = line.split("ACK:LC:", 1)[1].strip()
+            kv = dict(p.split("=", 1) for p in payload.split(",") if "=" in p)
+            if kv.get("ALIVE") == "1":
+                sat_note = " | BRIDGE SATURATED (Check A+/A-/E+/E- wires!)" if kv.get("SAT") == "1" else " | Bridge OK"
+                self._log_terminal(
+                    f"[NAU7802 Ping] ALIVE (REV={kv.get('REV')}, AVDDS={kv.get('AVDDS')}, "
+                    f"CTRL1={kv.get('CTRL1')}, RAW={kv.get('RAW')}, LBS={kv.get('LBS')}{sat_note})"
+                )
+            else:
+                self._log_terminal(f"[NAU7802 Ping] OFFLINE (ERR={kv.get('ERR', '0x0')} -> Check Qwiic PB6/PB7 wiring)")
+        elif "ACK:HELP:" in line:
+            self._log_terminal(f"[MCU Commands] {line.split('ACK:HELP:', 1)[1].strip()}")
         elif "ACK:HOMETHR:" in line:
             self._log_terminal(f"[TMC2209] StallGuard Threshold set to {line[12:]}")
         elif "ACK:HOMECURR:" in line:

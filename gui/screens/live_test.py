@@ -512,8 +512,8 @@ class LiveTestScreen(QWidget):
         row1.addWidget(self.spin_resistance)
 
         # Apply / Command Load Button
-        self.btn_send_load = QPushButton("Apply Load")
-        self.btn_send_load.setToolTip("Transmit commanded target load (RES <lbs>) to stepper actuator")
+        self.btn_send_load = QPushButton("Confirm & Move")
+        self.btn_send_load.setToolTip("Confirm selected weight (RES <lbs>) and move stepper actuator")
         self.btn_send_load.setCursor(Qt.PointingHandCursor)
         self.btn_send_load.setFixedHeight(32)
         self.btn_send_load.setStyleSheet(f"""
@@ -1344,11 +1344,25 @@ class LiveTestScreen(QWidget):
         if self.force_plot_mode != "SMOOTH_ANGLE":
             self.plot_force.setYRange(0, max(25.0, val * 1.6), padding=0)
 
-        # Dynamic auto-sync: instantly apply to simulation generator or hardware interface
-        if getattr(self, 'generator', None):
-            self.generator.target_resistance = val
-        if getattr(self, 'hw', None) and self.hw.is_connected:
-            self.hw.set_resistance(val)
+        # Preview only: do NOT auto-move motor on value edit; require explicit Confirm & Move click
+        applied = getattr(self, "_confirmed_resistance_lbs", None)
+        if applied is None or abs(float(val) - float(applied)) > 1e-3:
+            self.btn_send_load.setText("Confirm & Move *")
+            self.btn_send_load.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #38280f;
+                    color: {COLORS['warning']};
+                    border: 1px solid {COLORS['warning']};
+                    border-radius: 6px;
+                    padding: 4px 10px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {COLORS['warning']};
+                    color: #0d1117;
+                }}
+            """)
 
         if self.last_deficit_angle is None:
             res_txt = f"{val:.0f} lbs" if val.is_integer() else f"{val:.1f} lbs"
@@ -1368,12 +1382,16 @@ class LiveTestScreen(QWidget):
         self._on_resistance_value_changed(val)
 
     def _on_apply_load_clicked(self):
-        """Explicitly transmits commanded target resistance to STM32 NEMA stepper controller."""
+        """Explicitly confirm selected target weight, move stepper actuator, and update simulation."""
         val = self.spin_resistance.value()
         self._on_resistance_value_changed(val)
+        if getattr(self, 'generator', None):
+            self.generator.target_resistance = val
         if getattr(self, 'hw', None) and self.hw.is_connected:
+            self.hw.send_command(f"ARM {self.get_forearm_inches():.1f}")
             self.hw.set_resistance(val)
-        self.btn_send_load.setText("✓ Sent")
+        self._confirmed_resistance_lbs = float(val)
+        self.btn_send_load.setText("✓ Confirmed")
         self.btn_send_load.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['accent']};
@@ -1388,7 +1406,7 @@ class LiveTestScreen(QWidget):
         QTimer.singleShot(1500, self._reset_send_load_btn)
 
     def _reset_send_load_btn(self):
-        self.btn_send_load.setText("Apply Load")
+        self.btn_send_load.setText("Confirm & Move")
         self.btn_send_load.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_surface']};
@@ -1486,6 +1504,21 @@ class LiveTestScreen(QWidget):
             self.lbl_status.setStyleSheet(f"color: {COLORS['info']}; font-size: 13px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['info']};")
         if not self.timer.isActive():
             self.timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, 'timer') and not self.timer.isActive() and self.client_id is not None:
+            self.timer.start()
+
+    def hideEvent(self, event):
+        """Stop active test/streaming and disarm resistance when leaving Live Test page."""
+        super().hideEvent(event)
+        if hasattr(self, 'timer') and self.timer.isActive():
+            self.timer.stop()
+        if self.is_running:
+            self._stop_test()
+        elif hasattr(self, 'hw') and self.hw and self.hw.is_connected:
+            self.hw.stop_streaming()
 
     def cleanup(self):
         """Safely pause timers and close hardware streaming on view unload / app close."""
@@ -1632,7 +1665,8 @@ class LiveTestScreen(QWidget):
         self._on_resistance_changed(target_resistance)
 
         self.is_running = True
-        self.spin_resistance.setEnabled(False)
+        self.spin_resistance.setEnabled(True)
+        self.btn_send_load.setEnabled(True)
         self.btn_zero.setEnabled(False)
         self.btn_save.setVisible(False)
         self.btn_discard.setVisible(False)
@@ -1726,7 +1760,10 @@ class LiveTestScreen(QWidget):
             self.hw.connect()
 
         if self.hw.is_connected:
+            self.hw.send_command(f"ARM {self.get_forearm_inches():.1f}")
             self.hw.start_streaming(target_resistance=target_resistance)
+            self._confirmed_resistance_lbs = float(target_resistance)
+            self._reset_send_load_btn()
             self.lbl_status.setText("● RECORDING (Live Hardware)")
             self.lbl_status.setStyleSheet(f"color: {COLORS['accent']}; font-size: 13px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['accent']};")
         else:
@@ -1766,6 +1803,7 @@ class LiveTestScreen(QWidget):
         self.btn_discard.setVisible(True)
         self.spin_resistance.setEnabled(True)
         self.btn_zero.setEnabled(True)
+        self._confirmed_resistance_lbs = None
 
     def _save_test(self):
         if not self.full_time_data:
@@ -2003,6 +2041,15 @@ class LiveTestScreen(QWidget):
 
             if self.hw.is_connected:
                 samples = self.hw.read_samples()
+                for line in self.hw.read_text_lines():
+                    if "ALERT:LIMIT_ESTOP" in line or "ACK:STOP:LIMIT_ESTOP" in line:
+                        self._stop_test()
+                        self.lbl_status.setText("🛑 LIMIT SWITCH E-STOP -> HOMED TO 0.0 mm")
+                        self.lbl_status.setStyleSheet(
+                            f"color: {COLORS['danger']}; font-size: 13px; font-weight: bold; padding: 4px 10px; "
+                            f"background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['danger']};"
+                        )
+                        return
                 if samples:
                     for sample in samples:
                         t_ms = sample[0]

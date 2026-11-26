@@ -15,6 +15,10 @@
 
 #define CMD_BUF_SIZE        64
 #define RX_RING_BUF_SIZE    128
+#define TX_RING_BUF_SIZE    512U
+#define TX_CHUNK_MAX_SIZE   63U  /* Strictly < 64-byte FS MPS avoids extra ZLP frame delay */
+
+extern USBD_HandleTypeDef hUsbDeviceFS;
 
 /* Private Module Variables */
 static UART_HandleTypeDef *s_huart = (UART_HandleTypeDef *)0;
@@ -26,8 +30,15 @@ static volatile uint8_t s_rx_ring[RX_RING_BUF_SIZE];
 static volatile uint8_t s_rx_head = 0;
 static volatile uint8_t s_rx_tail = 0;
 
+static uint8_t           s_tx_ring[TX_RING_BUF_SIZE];
+static volatile uint16_t s_tx_head = 0U;
+static volatile uint16_t s_tx_tail = 0U;
+static uint8_t           s_tx_usb_chunk[TX_CHUNK_MAX_SIZE];
+
 /* Private Function Prototypes */
 static SystemCommand_t ProcessIncomingChar(char c);
+static void            Telemetry_TxKick(void);
+static bool            Telemetry_EnqueueUsb(const uint8_t *data, uint16_t len);
 
 /* Read the parameter associated with the latest parsed command
 ** Parameters:
@@ -80,6 +91,8 @@ void Telemetry_Init(UART_HandleTypeDef *huart)
   s_cmd_idx = 0;
   s_rx_head = 0;
   s_rx_tail = 0;
+  s_tx_head = 0U;
+  s_tx_tail = 0U;
   memset(s_cmd_buf, 0, sizeof(s_cmd_buf));
 } /* Telemetry_Init() */
 
@@ -162,6 +175,15 @@ static SystemCommand_t ProcessIncomingChar(char c)
       else if ( (strcasecmp(cmd, "STATUS") == 0) || (strcasecmp(cmd, "?") == 0) )
       {
         return CMD_STATUS;
+      }
+      else if ( (strcasecmp(cmd, "PINGLC") == 0) || (strcasecmp(cmd, "NAU7802") == 0) ||
+                (strcasecmp(cmd, "NAU") == 0) || (strcasecmp(cmd, "LC") == 0) )
+      {
+        return CMD_PING_LC;
+      }
+      else if ( strcasecmp(cmd, "HELP") == 0 )
+      {
+        return CMD_HELP;
       }
       else if ( strcasecmp(cmd, "TMC") == 0 )
       {
@@ -417,7 +439,8 @@ SystemCommand_t Telemetry_PollCommand(void)
     }
   }
 
-  /* 2. Poll USB CDC ring buffer */
+  /* 2. Flush any pending USB TX chunks and poll USB CDC RX ring buffer */
+  Telemetry_TxKick();
   while ( s_rx_tail != s_rx_head )
   {
     char c = (char)s_rx_ring[s_rx_tail];
@@ -432,6 +455,106 @@ SystemCommand_t Telemetry_PollCommand(void)
 
   return CMD_NONE;
 } /* Telemetry_PollCommand() */
+
+/* Return number of queued bytes currently waiting in the USB TX ring */
+static inline uint16_t Telemetry_TxUsedBytes(void)
+{
+  uint16_t head = s_tx_head;
+  uint16_t tail = s_tx_tail;
+  return (head >= tail) ? (uint16_t)(head - tail)
+                        : (uint16_t)(TX_RING_BUF_SIZE - tail + head);
+}
+
+/* Drain the next queued USB CDC chunk if the IN endpoint is idle
+** Notes:
+**   Safe to call from both thread mode (after enqueue/poll) and OTG_FS_IRQHandler
+**   (via Telemetry_OnUsbTxComplete). Masks OTG_FS_IRQn briefly in thread mode so
+**   s_tx_tail and hcdc->TxState cannot race, preventing torn IN DMA buffers.
+*/
+static void Telemetry_TxKick(void)
+{
+  bool in_thread = ((SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk) == 0U);
+  uint32_t irq_enabled = in_thread ? NVIC_GetEnableIRQ(OTG_FS_IRQn) : 0U;
+  if ( irq_enabled != 0U )
+  {
+    NVIC_DisableIRQ(OTG_FS_IRQn);
+  }
+
+  uint16_t count = Telemetry_TxUsedBytes();
+  if ( (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) &&
+       (hUsbDeviceFS.pClassData != (void *)0) &&
+       (count > 0U) )
+  {
+    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef *)hUsbDeviceFS.pClassData;
+    if ( hcdc->TxState == 0U )
+    {
+      if ( count > TX_CHUNK_MAX_SIZE )
+      {
+        count = TX_CHUNK_MAX_SIZE;
+      }
+      for ( uint16_t i = 0U; i < count; i++ )
+      {
+        s_tx_usb_chunk[i] = s_tx_ring[(s_tx_tail + i) % TX_RING_BUF_SIZE];
+      }
+      if ( CDC_Transmit_FS(s_tx_usb_chunk, count) == USBD_OK )
+      {
+        s_tx_tail = (uint16_t)((s_tx_tail + count) % TX_RING_BUF_SIZE);
+      }
+    }
+  }
+
+  if ( irq_enabled != 0U )
+  {
+    NVIC_EnableIRQ(OTG_FS_IRQn);
+  }
+} /* Telemetry_TxKick() */
+
+/* Atomically enqueue a full packet or ASCII line into the USB TX ring buffer */
+static bool Telemetry_EnqueueUsb(const uint8_t *data, uint16_t len)
+{
+  if ( (data == (const uint8_t *)0) || (len == 0U) || (len >= TX_RING_BUF_SIZE) )
+  {
+    return false;
+  }
+  if ( hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED )
+  {
+    return false;
+  }
+
+  uint32_t irq_enabled = NVIC_GetEnableIRQ(OTG_FS_IRQn);
+  if ( irq_enabled != 0U )
+  {
+    NVIC_DisableIRQ(OTG_FS_IRQn);
+  }
+
+  uint16_t free_bytes = (uint16_t)((TX_RING_BUF_SIZE - 1U) - Telemetry_TxUsedBytes());
+  bool fits = (free_bytes >= len);
+  if ( fits )
+  {
+    for ( uint16_t i = 0U; i < len; i++ )
+    {
+      s_tx_ring[s_tx_head] = data[i];
+      s_tx_head = (uint16_t)((s_tx_head + 1U) % TX_RING_BUF_SIZE);
+    }
+  }
+
+  if ( irq_enabled != 0U )
+  {
+    NVIC_EnableIRQ(OTG_FS_IRQn);
+  }
+
+  if ( fits )
+  {
+    Telemetry_TxKick();
+  }
+  return fits;
+} /* Telemetry_EnqueueUsb() */
+
+/* USB CDC IN transfer completion hook invoked from CDC_TransmitCplt_FS */
+void Telemetry_OnUsbTxComplete(void)
+{
+  Telemetry_TxKick();
+} /* Telemetry_OnUsbTxComplete() */
 
 /* Transmits a 28-byte binary telemetry packet with CRC16 over UART & USB CDC
 ** Parameters:
@@ -458,10 +581,8 @@ void Telemetry_SendPacket(TelemetryPacket_t *pkt)
     HAL_UART_Transmit(s_huart, (uint8_t *)pkt, sizeof(TelemetryPacket_t), 10);
   }
 
-  /* Transmit over USB CDC Virtual COM port */
-  static uint8_t s_usb_pkt_buf[sizeof(TelemetryPacket_t)];
-  memcpy(s_usb_pkt_buf, pkt, sizeof(TelemetryPacket_t));
-  CDC_Transmit_FS(s_usb_pkt_buf, sizeof(TelemetryPacket_t));
+  /* Atomically enqueue whole 28-byte packet so in-flight USB DMA is never torn */
+  (void)Telemetry_EnqueueUsb((const uint8_t *)pkt, (uint16_t)sizeof(TelemetryPacket_t));
 } /* Telemetry_SendPacket() */
 
 /* Transmits an ASCII text line over UART & USB CDC
@@ -479,21 +600,17 @@ void Telemetry_SendAck(const char *msg)
     return;
   }
 
+  size_t raw_len = strlen(msg);
+  uint16_t len = (raw_len > 256U) ? 256U : (uint16_t)raw_len;
+
   /* Transmit over hardware UART if initialized */
   if ( s_huart != (UART_HandleTypeDef *)0 )
   {
-    HAL_UART_Transmit(s_huart, (const uint8_t *)msg, (uint16_t)strlen(msg), 100);
+    HAL_UART_Transmit(s_huart, (const uint8_t *)msg, len, 100);
   }
 
-  /* Transmit over USB CDC Virtual COM port */
-  static uint8_t s_ack_buf[128];
-  uint16_t len = (uint16_t)strlen(msg);
-  if ( len > sizeof(s_ack_buf) )
-  {
-    len = sizeof(s_ack_buf);
-  }
-  memcpy(s_ack_buf, msg, len);
-  CDC_Transmit_FS(s_ack_buf, len);
+  /* Atomically enqueue whole ASCII ACK line (up to 256 bytes, avoiding truncation & drops) */
+  (void)Telemetry_EnqueueUsb((const uint8_t *)msg, len);
 } /* Telemetry_SendAck() */
 
 /* Compute standard CRC-16-CCITT (poly 0x1021, init 0xFFFF)

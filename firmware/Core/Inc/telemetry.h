@@ -65,7 +65,9 @@ typedef enum
   CMD_SET_HOMECURR,
   CMD_SET_HOMESLACK,
   CMD_SET_DIR,
-  CMD_DFU
+  CMD_DFU,
+  CMD_PING_LC,
+  CMD_HELP
 } SystemCommand_t;
 
 /* Public Function Prototypes */
@@ -76,6 +78,7 @@ void            Telemetry_SendPacket(TelemetryPacket_t *pkt);
 void            Telemetry_SendAck(const char *msg);
 uint16_t        Telemetry_ComputeCRC16(const uint8_t *data, size_t length);
 void            Telemetry_FeedUsbData(const uint8_t *data, uint32_t len);
+void            Telemetry_OnUsbTxComplete(void);
 
 #ifdef __cplusplus
 }

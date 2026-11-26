@@ -57,6 +57,7 @@ static uint32_t s_fail_count = 0;
 static uint8_t  s_init_step  = 0;
 
 /* Calibrated conversion scale factor: 106973 counts per lb (6.1 lb calibration) */
+#define LOAD_CELL_POLARITY          (-1.0f) /* Flipped so pulling tension reads positive lbs */
 static float    s_cal_scale  = (1.0f / 106972.5f);
 
 /* Internal Helper Prototypes */
@@ -363,7 +364,7 @@ float LoadCell_ReadForceLbs(void)
     }
   }
 
-  return ((float)(s_last_raw - s_tare_raw) * s_cal_scale);
+  return ((float)(s_last_raw - s_tare_raw) * s_cal_scale * LOAD_CELL_POLARITY);
 } /* LoadCell_ReadForceLbs() */
 
 /* Tare the load cell to current baseline unloaded state
@@ -494,3 +495,41 @@ void LoadCell_Diagnose(char *out_buf, size_t max_len)
            (unsigned long)i2c_err, (unsigned int)found_addr, (long)s_last_raw,
            LoadCell_ReadForceLbs());
 } /* LoadCell_Diagnose() */
+
+/* Fast non-destructive NAU7802 ping & bridge saturation check over I2C1
+** Parameters:
+**   out_buf - Output string buffer
+**   max_len - Buffer capacity
+** Return:
+**   None
+** Notes:
+**   Does NOT reset I2C1 or run blocking calibration so active streams keep running.
+*/
+void LoadCell_Ping(char *out_buf, size_t max_len)
+{
+  hi2c1.ErrorCode = HAL_I2C_ERROR_NONE;
+  HAL_StatusTypeDef rdy = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)NAU7802_I2C_ADDR, 2, 10);
+  uint32_t err = hi2c1.ErrorCode;
+
+  if ( rdy != HAL_OK )
+  {
+    snprintf(out_buf, max_len,
+             "ACK:LC:ALIVE=0,INIT=%d,REV=0x00,PU=0x00,AVDDS=0,CTRL1=0x00,RAW=%ld,LBS=%.2f,SAT=0,ERR=0x%lX\r\n",
+             s_is_ready ? 1 : 0, (long)s_last_raw, LoadCell_ReadForceLbs(), (unsigned long)err);
+    return;
+  }
+
+  uint8_t rev_id = 0, pu_ctrl = 0, ctrl1 = 0;
+  (void)nau7802_read_reg(NAU7802_REG_REV_ID, &rev_id);
+  (void)nau7802_read_reg(NAU7802_REG_PU_CTRL, &pu_ctrl);
+  (void)nau7802_read_reg(NAU7802_REG_CTRL1, &ctrl1);
+
+  int avdds = ((pu_ctrl & NAU7802_PU_AVDDS) != 0) ? 1 : 0;
+  int sat   = ((s_last_raw >= 8388000L) || (s_last_raw <= -8388000L)) ? 1 : 0;
+  float lbs = LoadCell_ReadForceLbs();
+
+  snprintf(out_buf, max_len,
+           "ACK:LC:ALIVE=1,INIT=%d,REV=0x%02X,PU=0x%02X,AVDDS=%d,CTRL1=0x%02X,RAW=%ld,LBS=%.2f,SAT=%d,ERR=0x%lX\r\n",
+           s_is_ready ? 1 : 0, (unsigned int)rev_id, (unsigned int)pu_ctrl,
+           avdds, (unsigned int)ctrl1, (long)s_last_raw, lbs, sat, (unsigned long)err);
+} /* LoadCell_Ping() */

@@ -37,8 +37,10 @@ extern "C" {
 #define VELOCITY_GATE_DEG_S         3.0f      /* deg/s minimum joint speed */
 #define FORCE_GATE_LBS              0.50f     /* lbf minimum patient applied load */
 #define INTEGRAL_MAX_TRIM_MM        3.0f      /* mm maximum feedback trim */
-#define MAX_SLEW_VELOCITY_MM_S      25.0f     /* mm/s maximum linear speed */
-#define MAX_ACCELERATION_MM_S2      200.0f    /* mm/s^2 smooth trapezoidal acceleration ramp */
+#define MAX_SLEW_VELOCITY_MM_S      15.0f     /* mm/s smooth normal linear slew speed */
+#define MAX_ACCELERATION_MM_S2      45.0f     /* mm/s^2 smooth trapezoidal acceleration ramp (~0.33 s to full speed) */
+#define ARREST_SLEW_VELOCITY_MM_S   25.0f     /* mm/s emergency drop-arrest lockup speed */
+#define ARREST_ACCELERATION_MM_S2   200.0f    /* mm/s^2 emergency drop-arrest acceleration */
 #define MIN_SLEW_VELOCITY_MM_S      0.5f      /* mm/s minimum crawling speed */
 
 /* Stepper Motor & Lead Screw Mechanical Geometry */
@@ -119,6 +121,7 @@ void     Motor_SetHomingSlackMm(float slack_mm);
 float    Motor_GetHomingSlackMm(void);
 bool     Motor_SensorlessHome(void);
 bool     Motor_IsLimitSwitchTriggered(void);
+bool     Motor_ServiceLimitEstop(void);
 bool     Motor_Home(void);
 const char *Motor_GetHomingDiagnostic(void);
 

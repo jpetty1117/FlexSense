@@ -59,7 +59,7 @@ int32_t Encoder_GetCount(void)
 {
   if ( s_htim != (TIM_HandleTypeDef *)0 )
   {
-    return (int32_t)__HAL_TIM_GET_COUNTER(s_htim);
+    return ((int32_t)__HAL_TIM_GET_COUNTER(s_htim) * (int32_t)ENCODER_POLARITY);
   }
   return 0;
 } /* Encoder_GetCount() */

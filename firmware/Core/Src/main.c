@@ -103,8 +103,13 @@ int main(void)
   Motor_Init();
   SpO2_Init();
 
+  /* Home carriage to PB13 limit switch on startup, back off 30 mm slack, and zero at 0.0 mm */
+  (void)Motor_Home();
+  Encoder_Zero();
+  LoadCell_Tare();
+
   Telemetry_SendAck("\r\n=== STM32F411CE FlexSense Embedded System Ready ===\r\n");
-  Telemetry_SendAck("Commands: START, STOP, ZERO, STATUS, RES <lbs>, CURR <mA>, TMC, SPO2, HOME\r\n");
+  Telemetry_SendAck("Commands: START, STOP, ZERO, ZEROPOS, TARE, PINGLC, STATUS, TMC, SPO2, HOME, RES, TORQ, ARM, POS, DIR, HELP\r\n");
   /* Indicate boot by turning ON LED (PC13 active-low) */
   HAL_GPIO_WritePin(LED_PIN_GPIO_Port, LED_PIN_Pin, GPIO_PIN_RESET);
 
@@ -120,6 +125,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* 0. Hardware Limit Switch PB13 E-Stop: Cancel any run/move immediately and re-home to 30 mm slack */
+    if ( Motor_ServiceLimitEstop() )
+    {
+      s_sys_state = SYS_STATE_IDLE;
+      Telemetry_SendAck("ALERT:LIMIT_ESTOP:PB13_CANCELLED_RETURNING_HOME\r\n");
+      Telemetry_SendAck("ACK:STOP:LIMIT_ESTOP\r\n");
+      bool home_ok = Motor_Home();
+      char home_ack[96];
+      snprintf(home_ack, sizeof(home_ack), "ACK:HOME:%s,%s\r\n",
+               home_ok ? "OK" : "TIMEOUT", Motor_GetHomingDiagnostic());
+      Telemetry_SendAck(home_ack);
+      s_last_tick = HAL_GetTick();
+    }
+
     /* 1. Poll incoming serial commands from GUI / host */
     SystemCommand_t cmd = Telemetry_PollCommand();
 
@@ -216,6 +235,18 @@ int main(void)
         }
         break;
 
+      case CMD_PING_LC:
+        {
+          char lc_msg[128];
+          LoadCell_Ping(lc_msg, sizeof(lc_msg));
+          Telemetry_SendAck(lc_msg);
+        }
+        break;
+
+      case CMD_HELP:
+        Telemetry_SendAck("ACK:HELP:START,STOP,ZERO,ZEROPOS,TARE,PINGLC,STATUS,TMC,SPO2,HOME,RES,TORQ,ARM,POS,CURR,DIR,INVERT,HOMESLACK,HOMECURR,HOMESPEED,HOMETHR,ARRESTTHR,RESETARREST,DFU\r\n");
+        break;
+
       case CMD_TMC:
         {
           char tmc_msg[256];
@@ -278,7 +309,7 @@ int main(void)
         {
           bool ok = Motor_Home();
           char home_ack[96];
-          snprintf(home_ack, sizeof(home_ack), "ACK:HOME:%s,%s,CLEAR=5MM,POS=0.0\r\n",
+          snprintf(home_ack, sizeof(home_ack), "ACK:HOME:%s,%s\r\n",
                    ok ? "OK" : "TIMEOUT", Motor_GetHomingDiagnostic());
           Telemetry_SendAck(home_ack);
         }
@@ -286,13 +317,8 @@ int main(void)
 
       case CMD_TARE:
         {
-          bool ok = Motor_Home();
-          Encoder_Zero();
           LoadCell_Tare();
-          char tare_ack[96];
-          snprintf(tare_ack, sizeof(tare_ack), "ACK:TARE:%s,%s,CLEAR=5MM,POS=0.0\r\n",
-                   ok ? "OK" : "TIMEOUT", Motor_GetHomingDiagnostic());
-          Telemetry_SendAck(tare_ack);
+          Telemetry_SendAck("ACK:TARE:OK\r\n");
         }
         break;
 
