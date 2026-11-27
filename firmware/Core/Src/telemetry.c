@@ -193,11 +193,6 @@ static SystemCommand_t ProcessIncomingChar(char c)
       {
         return CMD_SPO2;
       }
-      else if ( (strcasecmp(cmd, "RESETARREST") == 0) || (strcasecmp(cmd, "UNARREST") == 0) ||
-                (strcasecmp(cmd, "CLEARARREST") == 0) )
-      {
-        return CMD_RESET_ARREST;
-      }
       else if ( (strcasecmp(cmd, "HOME") == 0) || (strcasecmp(cmd, "H") == 0) )
       {
         return CMD_HOME;
@@ -314,22 +309,6 @@ static SystemCommand_t ProcessIncomingChar(char c)
         {
           s_cmd_param = (float)strtod(p, (char **)0);
           return CMD_SET_ARM;
-        }
-      }
-      else if ( (strncasecmp(cmd, "ARRESTTHR", 9) == 0) || (strncasecmp(cmd, "DROPTHR", 7) == 0) )
-      {
-        /* Support "ARRESTTHR -160", "DROPTHR 180" (deg/s threshold) */
-        const char *p = (strncasecmp(cmd, "ARRESTTHR", 9) == 0) ? &cmd[9] : &cmd[7];
-        while ( (*p == ' ') || (*p == ':') || (*p == '=') || (*p == '\t') )
-        {
-          p++;
-        }
-        if ( *p != '\0' )
-        {
-          float v = (float)strtod(p, (char **)0);
-          if ( v > 0.0f ) v = -v; /* Ensure negative threshold */
-          s_cmd_param = v;
-          return CMD_SET_ARREST_THRESH;
         }
       }
       else if ( (strncasecmp(cmd, "RES", 3) == 0) || (strncasecmp(cmd, "SET", 3) == 0) )

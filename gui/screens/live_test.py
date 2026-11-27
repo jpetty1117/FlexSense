@@ -594,7 +594,7 @@ class LiveTestScreen(QWidget):
 
         # Intuitive Zero / Tare Button
         self.btn_zero = QPushButton("⟲ Zero Sensors")
-        self.btn_zero.setToolTip("Zero joint angle and tare load cell baseline (also homes carriage)")
+        self.btn_zero.setToolTip("Zero joint angle and tare load cell baseline")
         self.btn_zero.setCursor(Qt.PointingHandCursor)
         self.btn_zero.setFixedHeight(32)
         self.btn_zero.setMinimumWidth(115)
@@ -1445,18 +1445,16 @@ class LiveTestScreen(QWidget):
         pin = self.get_forearm_pin()
         inches = self.get_forearm_inches()
         self.lbl_hud_work_sub.setText(f"Cumulative Energy (Pin {pin}: {inches:.0f}\")")
+        if self.hw.is_connected and (self.is_running or getattr(self, "_confirmed_resistance_lbs", None) is not None):
+            self.hw.send_command(f"ARM {inches:.1f}")
         if not self.is_running:
             self.lbl_hud_force_sub.setText(f"Peak: {self.max_session_force:.1f} lbs • Target: {self.spin_resistance.value():.1f} lbs")
 
     def _zero_encoder(self):
-        """Homes NEMA stepper carriage to limit, backs off 5 mm, and tares encoder & load cell."""
+        """Zero joint angle and tare load cell baseline."""
         if not self.hw.is_connected:
             self.hw.connect()
         if self.hw.is_connected:
-            self.lbl_status.setText("● HOMING NEMA & TARING SENSORS...")
-            self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 13px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['warning']};")
-            QApplication.processEvents()
-            self.hw.home()
             self.hw.zero()
         self.current_rom = 0.0
         self.current_force = 0.0
@@ -1475,7 +1473,7 @@ class LiveTestScreen(QWidget):
         self.lbl_hud_rom_sub.setText("Live Angle: 0.0°")
         self.lbl_hud_force.setText("0.0 lbs")
         self.lbl_hud_force_sub.setText(f"Sensor Tared • Target: {self.spin_resistance.value():.1f} lbs")
-        self.lbl_status.setText("● NEMA HOMED & SENSORS TARED (Ready)")
+        self.lbl_status.setText("● SENSORS ZEROED & TARED (Ready)")
         self.lbl_status.setStyleSheet(f"color: {COLORS['info']}; font-size: 13px; font-weight: bold; padding: 4px 10px; background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['info']};")
 
     def _setup_timer(self):
@@ -1483,7 +1481,6 @@ class LiveTestScreen(QWidget):
         self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.setInterval(int(self.dt * 1000))  # 16ms ~ 60 FPS
         self.timer.timeout.connect(self._update_data)
-        self.timer.start()
 
     def setup(self, client_id):
         self.client_id = client_id
@@ -1912,7 +1909,7 @@ class LiveTestScreen(QWidget):
             self.current_rep_peak = 0.0
 
         if self.rep_state in ("EXTENDED", "IDLE"):
-            if rom < self.session_baseline_rom or self.ticks <= 5:
+            if self.ticks <= 1 or rom < self.session_baseline_rom:
                 self.session_baseline_rom = rom
 
             if rom > (self.session_baseline_rom + 25.0) and speed > 10.0:

@@ -311,8 +311,8 @@ bool TMC2209_Init(void)
   /* 6. Commit final Base Global Configuration */
   TMC2209_WriteRegister(TMC2209_REG_GCONF, s_gconf_shadow);
 
-  /* 7. Set Standard Running Current (1.3 A / 1300 mA RMS limit over UART, 50% hold current) */
-  TMC2209_SetCurrent(1300, 50);
+  /* 7. Set Standard Running Current (1.5 A / 1500 mA RMS limit over UART, 40% hold current) */
+  TMC2209_SetCurrent(1500, 40);
 
   /* 8. Configure 1/16 Microstepping with 256-Microstep Interpolation */
   TMC2209_SetMicrostepping(16, true);

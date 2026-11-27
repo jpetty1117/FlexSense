@@ -3,15 +3,16 @@ Rehab Test System - Streamlined Dev & Calibration Workstation
 -------------------------------------------------------------
 Unified, ergonomic developer workstation:
   1. Top Live Sensor HUD Strip (Angle, Speed, Force, Carriage, SpO2, TMC2209)
-  2. Quick Hardware Actions (Zero Encoder, Zero Motor, Tare Load Cell, Query TMC, Reset Arrest)
+  2. Quick Hardware Actions (Zero Encoder, Zero Motor, Tare Load Cell, Query TMC)
   3. Stepper Carriage Position Control (Jog buttons, set pos, quick presets, smooth slider, zero motor)
   4. Command Target Load & Shaft Torque with Forearm Pin Selection and instant LUT displacement preview
-  5. Homing & TMC2209 Motor Tuning + High-Speed Descent Drop Arrest Safety Control
-  6. Single-Curl Torque-Domain LUT Calibration (Peak latch, point capture, fit & export to brake_lut.h, pio rebuild)
+  5. Homing & TMC2209 Motor Tuning Control
+  6. Single-Curl & Manual Torque-Domain LUT Calibration (Distance + Weight entry, fit & export to brake_lut.h, pio rebuild)
   7. Dual PyQtGraph Visualizers: Torque Calibration Curve + Real-Time Live Curl Force Stripchart
   8. Interactive Serial Command Terminal & Activity Log (VCP / USB CDC)
 """
 
+import re
 import os
 import sys
 import json
@@ -36,11 +37,12 @@ except ImportError:
     from gui.theme import COLORS
 
 try:
-    from hardware_interface import STM32EncoderInterface
+    from hardware_interface import STM32EncoderInterface, load_dev_config, save_dev_config
 except ImportError:
-    from gui.hardware_interface import STM32EncoderInterface
+    from gui.hardware_interface import STM32EncoderInterface, load_dev_config, save_dev_config
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+CAPTURED_LUT_PATH = os.path.join(REPO_ROOT, "calibration", "gui_captured_lut_points.json")
 
 
 class DevToolsScreen(QWidget):
@@ -66,7 +68,8 @@ class DevToolsScreen(QWidget):
         self.commanded_torque_lbf_in = 120.0
         self.peak_curl_force = 0.0
         self.peak_curl_torque = 0.0
-        self.captured_lut_points = []  # List of tuples: (pos_mm, force_lbs, torque_lbf_in)
+        self.captured_lut_points = self._load_captured_points()
+        self._dev_cfg = load_dev_config()
 
         self._last_term_stream_t = 0.0
 
@@ -76,6 +79,10 @@ class DevToolsScreen(QWidget):
         self._strip_start_t = time.time()
 
         self._build_ui()
+        self._apply_dev_config_to_ui()
+        self._refresh_lut_table()
+        self._update_plot_curve()
+        self._update_torque_and_displacement_preview()
         self._setup_telemetry_timer()
 
     def showEvent(self, event):
@@ -84,8 +91,11 @@ class DevToolsScreen(QWidget):
             self.timer.start()
         if not self.hw.is_connected:
             self._probe_hardware()
-        elif not getattr(self.hw, 'is_streaming', False):
-            self.hw.start_streaming()
+        else:
+            if not getattr(self.hw, 'is_streaming', False):
+                self.hw.start_streaming()
+            if hasattr(self.hw, 'apply_dev_config'):
+                self.hw.apply_dev_config(self._dev_cfg)
         # Query current motor direction polarity, sensor health, and forearm setting
         self._send_raw_command("DIR?")
         self._send_raw_command("TMC")
@@ -117,7 +127,7 @@ class DevToolsScreen(QWidget):
         title.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 16px; font-weight: bold;")
         title_box.addWidget(title)
 
-        subtitle = QLabel("Torque-Domain Kinematic LUT • Stepper Positioning • High-Speed Descent Drop Arrest • Multi-Sensor HUD")
+        subtitle = QLabel("Torque-Domain Kinematic LUT • Stepper Positioning • Multi-Sensor HUD")
         subtitle.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         title_box.addWidget(subtitle)
         header.addLayout(title_box)
@@ -146,22 +156,6 @@ class DevToolsScreen(QWidget):
         header.addWidget(self.btn_reconnect)
 
         root_layout.addLayout(header)
-
-        # ── 1B. Emergency Descent Drop Arrest Alert Banner ──
-        self.lbl_arrest_banner = QLabel("🛑 DESCENT DROP ARREST ENGAGED: Rapid drop detected! Brake locked to halt handle fall.")
-        self.lbl_arrest_banner.setStyleSheet("""
-            QLabel {
-                background-color: #8b0000;
-                color: #ffffff;
-                border: 2px solid #f85149;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 12px;
-                padding: 5px 12px;
-            }
-        """)
-        self.lbl_arrest_banner.setVisible(False)
-        root_layout.addWidget(self.lbl_arrest_banner)
 
         # ── 2. Top Live Sensor HUD Strip & Hardware Action Toolbar ──
         root_layout.addWidget(self._build_sensor_hud())
@@ -357,13 +351,6 @@ class DevToolsScreen(QWidget):
         btn_q_tmc.clicked.connect(lambda: self._send_raw_command("TMC"))
         row_bar.addWidget(btn_q_tmc)
 
-        btn_reset_arrest = QPushButton("🔓 Unlock Arrest")
-        btn_reset_arrest.setFixedHeight(24)
-        btn_reset_arrest.setCursor(Qt.PointingHandCursor)
-        btn_reset_arrest.setStyleSheet(self._secondary_btn_style(COLORS['danger']))
-        btn_reset_arrest.clicked.connect(lambda: self._send_raw_command("RESETARREST"))
-        row_bar.addWidget(btn_reset_arrest)
-
         row_bar.addStretch()
 
         btn_stream_start = QPushButton("▶ Start Stream")
@@ -426,7 +413,7 @@ class DevToolsScreen(QWidget):
 
         self.spin_stepper_pos = QDoubleSpinBox()
         self.spin_stepper_pos.setFixedWidth(78)
-        self.spin_stepper_pos.setRange(-25.0, 35.0)
+        self.spin_stepper_pos.setRange(-25.0, 28.0)
         self.spin_stepper_pos.setSingleStep(0.5)
         self.spin_stepper_pos.setDecimals(1)
         self.spin_stepper_pos.setSuffix(" mm")
@@ -535,9 +522,9 @@ class DevToolsScreen(QWidget):
         row_presets.addStretch()
         layout.addLayout(row_presets)
 
-        # Row 4: Smooth Slider (-25.0 to +35.0 mm)
+        # Row 4: Smooth Slider (-25.0 to +28.0 mm)
         self.slider_stepper_pos = QSlider(Qt.Horizontal)
-        self.slider_stepper_pos.setRange(-250, 350)  # -25.0 to +35.0 mm in 0.1 mm units
+        self.slider_stepper_pos.setRange(-250, 280)  # -25.0 to +28.0 mm in 0.1 mm units
         self.slider_stepper_pos.setValue(0)
         self.slider_stepper_pos.setStyleSheet(self._slider_style())
         self.slider_stepper_pos.valueChanged.connect(self._on_pos_slider_changed)
@@ -655,8 +642,8 @@ class DevToolsScreen(QWidget):
         return grp
 
     def _build_homing_panel(self):
-        """Homing controls, sensitivity threshold, direction polarity, and descent safety."""
-        grp = QGroupBox("3. Homing, Driver Settings && Descent Safety")
+        """Homing controls, sensitivity threshold, and direction polarity."""
+        grp = QGroupBox("3. Homing && Driver Settings")
         grp.setStyleSheet(self._group_box_style())
         layout = QVBoxLayout(grp)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -713,10 +700,41 @@ class DevToolsScreen(QWidget):
         row_dir.addStretch()
         layout.addLayout(row_dir)
 
+        # Row 2B: Active Run Current (auto-drops to 500 mA standby at 0.0 mm)
+        row_run_curr = QHBoxLayout()
+        row_run_curr.setSpacing(8)
+        lbl_rcur = QLabel("Run Current:")
+        lbl_rcur.setFixedWidth(80)
+        lbl_rcur.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        row_run_curr.addWidget(lbl_rcur)
+        self.spin_run_curr = QDoubleSpinBox()
+        self.spin_run_curr.setFixedWidth(80)
+        self.spin_run_curr.setRange(400, 1770)
+        self.spin_run_curr.setValue(1500)
+        self.spin_run_curr.setSingleStep(50)
+        self.spin_run_curr.setDecimals(0)
+        self.spin_run_curr.setSuffix(" mA")
+        self.spin_run_curr.setStyleSheet(self._input_style())
+        row_run_curr.addWidget(self.spin_run_curr)
+
+        btn_apply_run_curr = QPushButton("Set")
+        btn_apply_run_curr.setFixedHeight(24)
+        btn_apply_run_curr.setFixedWidth(36)
+        btn_apply_run_curr.setCursor(Qt.PointingHandCursor)
+        btn_apply_run_curr.setStyleSheet(self._secondary_btn_style(COLORS['accent']))
+        btn_apply_run_curr.clicked.connect(self._set_run_current)
+        row_run_curr.addWidget(btn_apply_run_curr)
+
+        lbl_rcur_hint = QLabel("(Auto 500 mA @ 0 mm)")
+        lbl_rcur_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
+        row_run_curr.addWidget(lbl_rcur_hint)
+        row_run_curr.addStretch()
+        layout.addLayout(row_run_curr)
+
         # Row 3: Homing Current
         row_curr = QHBoxLayout()
         row_curr.setSpacing(8)
-        lbl_cur = QLabel("Current:")
+        lbl_cur = QLabel("Home Curr:")
         lbl_cur.setFixedWidth(80)
         lbl_cur.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
         row_curr.addWidget(lbl_cur)
@@ -735,7 +753,7 @@ class DevToolsScreen(QWidget):
         btn_apply_curr.setFixedWidth(36)
         btn_apply_curr.setCursor(Qt.PointingHandCursor)
         btn_apply_curr.setStyleSheet(self._secondary_btn_style(COLORS['accent']))
-        btn_apply_curr.clicked.connect(lambda: self._send_raw_command(f"HOMECURR {int(self.spin_homing_curr.value())}"))
+        btn_apply_curr.clicked.connect(self._set_homing_current)
         row_curr.addWidget(btn_apply_curr)
         row_curr.addStretch()
         layout.addLayout(row_curr)
@@ -762,7 +780,7 @@ class DevToolsScreen(QWidget):
         btn_apply_spd.setFixedWidth(36)
         btn_apply_spd.setCursor(Qt.PointingHandCursor)
         btn_apply_spd.setStyleSheet(self._secondary_btn_style(COLORS['accent']))
-        btn_apply_spd.clicked.connect(lambda: self._send_raw_command(f"HOMESPEED {int(self.spin_homing_speed.value())}"))
+        btn_apply_spd.clicked.connect(self._set_homing_speed)
         row_spd.addWidget(btn_apply_spd)
         row_spd.addStretch()
         layout.addLayout(row_spd)
@@ -789,7 +807,7 @@ class DevToolsScreen(QWidget):
         btn_apply_slk.setFixedWidth(36)
         btn_apply_slk.setCursor(Qt.PointingHandCursor)
         btn_apply_slk.setStyleSheet(self._secondary_btn_style(COLORS['accent']))
-        btn_apply_slk.clicked.connect(lambda: self._send_raw_command(f"HOMESLACK {self.spin_homing_slack.value():.1f}"))
+        btn_apply_slk.clicked.connect(self._set_homing_slack)
         row_slack.addWidget(btn_apply_slk)
 
         lbl_slk_hint = QLabel("(Off PB13)")
@@ -798,36 +816,7 @@ class DevToolsScreen(QWidget):
         row_slack.addStretch()
         layout.addLayout(row_slack)
 
-        # Row 6: Descent Drop Arrest Safety Control
-        row_safety = QHBoxLayout()
-        row_safety.setSpacing(8)
-        lbl_ar = QLabel("Drop Arrest:")
-        lbl_ar.setFixedWidth(80)
-        lbl_ar.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
-        row_safety.addWidget(lbl_ar)
-
-        self.spin_arrest_thresh = QDoubleSpinBox()
-        self.spin_arrest_thresh.setFixedWidth(80)
-        self.spin_arrest_thresh.setRange(-400.0, -50.0)
-        self.spin_arrest_thresh.setValue(-160.0)
-        self.spin_arrest_thresh.setSingleStep(10.0)
-        self.spin_arrest_thresh.setDecimals(0)
-        self.spin_arrest_thresh.setSuffix(" °/s")
-        self.spin_arrest_thresh.setStyleSheet(self._input_style())
-        row_safety.addWidget(self.spin_arrest_thresh)
-
-        btn_set_arrest = QPushButton("Set")
-        btn_set_arrest.setFixedHeight(24)
-        btn_set_arrest.setFixedWidth(36)
-        btn_set_arrest.setCursor(Qt.PointingHandCursor)
-        btn_set_arrest.setStyleSheet(self._secondary_btn_style(COLORS['accent']))
-        btn_set_arrest.clicked.connect(lambda: self._send_raw_command(f"ARRESTTHR {int(self.spin_arrest_thresh.value())}"))
-        row_safety.addWidget(btn_set_arrest)
-
-        row_safety.addStretch()
-        layout.addLayout(row_safety)
-
-        # Row 5: Realtime homing status
+        # Row 6: Realtime homing status
         self.lbl_homing_status = QLabel("Last Homing: Standby (Click 'Home Stepper' to calibrate 0.0 mm reference)")
         self.lbl_homing_status.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
         layout.addWidget(self.lbl_homing_status)
@@ -902,6 +891,53 @@ class DevToolsScreen(QWidget):
 
         layout.addLayout(row_cap)
 
+        # Row 2B: Manual Distance from Zero + Weight Input (auto-calculates torque from selected Pin)
+        row_manual = QHBoxLayout()
+        row_manual.setSpacing(6)
+
+        lbl_m_pos = QLabel("Dist:")
+        lbl_m_pos.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        row_manual.addWidget(lbl_m_pos)
+
+        self.spin_lut_pos = QDoubleSpinBox()
+        self.spin_lut_pos.setFixedWidth(84)
+        self.spin_lut_pos.setRange(-25.0, 28.0)
+        self.spin_lut_pos.setValue(15.0)
+        self.spin_lut_pos.setSingleStep(0.5)
+        self.spin_lut_pos.setDecimals(2)
+        self.spin_lut_pos.setSuffix(" mm")
+        self.spin_lut_pos.setStyleSheet(self._input_style())
+        row_manual.addWidget(self.spin_lut_pos)
+
+        lbl_m_wt = QLabel("Wt:")
+        lbl_m_wt.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px;")
+        row_manual.addWidget(lbl_m_wt)
+
+        self.spin_lut_force = QDoubleSpinBox()
+        self.spin_lut_force.setFixedWidth(84)
+        self.spin_lut_force.setRange(0.0, 40.0)
+        self.spin_lut_force.setValue(15.0)
+        self.spin_lut_force.setSingleStep(0.5)
+        self.spin_lut_force.setDecimals(2)
+        self.spin_lut_force.setSuffix(" lbs")
+        self.spin_lut_force.setStyleSheet(self._input_style())
+        self.spin_lut_force.valueChanged.connect(self._update_manual_lut_torque_preview)
+        row_manual.addWidget(self.spin_lut_force)
+
+        self.lbl_lut_manual_torque = QLabel("= 180.0 lbf·in (@ 12\")")
+        self.lbl_lut_manual_torque.setStyleSheet(f"color: {COLORS['accent_cyan']}; font-size: 11px; font-weight: bold;")
+        row_manual.addWidget(self.lbl_lut_manual_torque)
+
+        self.btn_add_manual_pt = QPushButton("➕ Add Point")
+        self.btn_add_manual_pt.setFixedHeight(26)
+        self.btn_add_manual_pt.setCursor(Qt.PointingHandCursor)
+        self.btn_add_manual_pt.setStyleSheet(self._secondary_btn_style(COLORS['accent']))
+        self.btn_add_manual_pt.clicked.connect(self._add_manual_lut_point)
+        row_manual.addWidget(self.btn_add_manual_pt)
+
+        row_manual.addStretch()
+        layout.addLayout(row_manual)
+
         # Row 3: Table of Captured Points (Pos, Force, Torque, Action)
         self.table_lut = QTableWidget()
         self.table_lut.setColumnCount(4)
@@ -949,12 +985,19 @@ class DevToolsScreen(QWidget):
         self.btn_clear_pts.clicked.connect(self._clear_captured_points)
         row_lut_acts.addWidget(self.btn_clear_pts, stretch=1)
 
-        self.btn_rebuild_fw = QPushButton("Rebuild FW (pio)")
+        self.btn_rebuild_fw = QPushButton("Build FW")
         self.btn_rebuild_fw.setFixedHeight(28)
         self.btn_rebuild_fw.setCursor(Qt.PointingHandCursor)
         self.btn_rebuild_fw.setStyleSheet(self._secondary_btn_style(COLORS['info']))
         self.btn_rebuild_fw.clicked.connect(self._rebuild_firmware)
         row_lut_acts.addWidget(self.btn_rebuild_fw, stretch=1)
+
+        self.btn_flash_fw = QPushButton("⚡ Flash MCU")
+        self.btn_flash_fw.setFixedHeight(28)
+        self.btn_flash_fw.setCursor(Qt.PointingHandCursor)
+        self.btn_flash_fw.setStyleSheet(self._secondary_btn_style(COLORS['warning']))
+        self.btn_flash_fw.clicked.connect(self._flash_firmware)
+        row_lut_acts.addWidget(self.btn_flash_fw, stretch=1)
 
         layout.addLayout(row_lut_acts)
 
@@ -1125,7 +1168,7 @@ class DevToolsScreen(QWidget):
 
     def _jog_stepper(self, delta_mm: float):
         cur = self.spin_stepper_pos.value()
-        new_val = round(max(-25.0, min(35.0, cur + delta_mm)), 2)
+        new_val = round(max(-25.0, min(28.0, cur + delta_mm)), 2)
         self.spin_stepper_pos.setValue(new_val)
         self._command_stepper_pos()
 
@@ -1151,6 +1194,7 @@ class DevToolsScreen(QWidget):
         self.forearm_length_in = float(self.combo_forearm.currentData() or 12.0)
         self._send_raw_command(f"ARM {self.forearm_length_in:.1f}")
         self._update_torque_and_displacement_preview()
+        self._update_manual_lut_torque_preview()
 
     def _set_preset_load(self, val: float):
         self.spin_cmd_load.setValue(val)
@@ -1158,6 +1202,11 @@ class DevToolsScreen(QWidget):
 
     def _on_cmd_load_changed(self, val: float):
         self._update_torque_and_displacement_preview()
+
+    def _update_manual_lut_torque_preview(self):
+        if hasattr(self, "spin_lut_force") and hasattr(self, "lbl_lut_manual_torque"):
+            torque = self.spin_lut_force.value() * self.forearm_length_in
+            self.lbl_lut_manual_torque.setText(f"= {torque:.1f} lbf·in (@ {self.forearm_length_in:.0f}\")")
 
     def _update_torque_and_displacement_preview(self):
         val = self.spin_cmd_load.value()
@@ -1167,7 +1216,13 @@ class DevToolsScreen(QWidget):
 
         est_pos = 0.0
         if torque > 0:
-            est_pos = 8.586 + (torque / 72.39)
+            if len(self.captured_lut_points) >= 2:
+                lut_torques = np.linspace(0.0, 325.0, 66)
+                fitted_pos, _ = self._compute_monotonic_lut(lut_torques)
+                est_pos = float(np.interp(torque, lut_torques, fitted_pos))
+            else:
+                lut_t, lut_p, _ = self._load_flashed_brake_lut()
+                est_pos = float(np.interp(torque, lut_t, lut_p))
         self.lbl_lut_feedforward.setText(f"LUT Displacement: ~{est_pos:.1f} mm")
 
     def _command_load_resistance(self):
@@ -1187,11 +1242,38 @@ class DevToolsScreen(QWidget):
         self._send_raw_command("STOP")
         self._log_terminal("🛑 EMERGENCY STOP: Sent STOP to STM32. Motor driver disabled immediately.")
 
+    def _apply_dev_config_to_ui(self):
+        self.spin_run_curr.setValue(float(self._dev_cfg["run_curr_ma"]))
+        self.spin_homing_curr.setValue(float(self._dev_cfg["homing_curr_ma"]))
+        self.spin_homing_speed.setValue(float(self._dev_cfg["homing_speed_us"]))
+        self.spin_homing_slack.setValue(float(self._dev_cfg["homing_slack_mm"]))
+
+    def _set_run_current(self):
+        ma = int(self.spin_run_curr.value())
+        self._dev_cfg = save_dev_config({"run_curr_ma": ma})
+        self._send_raw_command(f"CURR {ma}")
+
+    def _set_homing_current(self):
+        ma = int(self.spin_homing_curr.value())
+        self._dev_cfg = save_dev_config({"homing_curr_ma": ma})
+        self._send_raw_command(f"HOMECURR {ma}")
+
+    def _set_homing_speed(self):
+        us = int(self.spin_homing_speed.value())
+        self._dev_cfg = save_dev_config({"homing_speed_us": us})
+        self._send_raw_command(f"HOMESPEED {us}")
+
+    def _set_homing_slack(self):
+        slack = float(self.spin_homing_slack.value())
+        self._dev_cfg = save_dev_config({"homing_slack_mm": slack})
+        self._send_raw_command(f"HOMESLACK {slack:.1f}")
+
     def _toggle_motor_dir(self):
         self._send_raw_command("INVERT")
 
     def _home_stepper(self):
         slack = self.spin_homing_slack.value()
+        self._dev_cfg = save_dev_config({"homing_slack_mm": float(slack)})
         self._send_raw_command(f"HOMESLACK {slack:.1f}")
         self._send_raw_command("HOME")
         self.spin_stepper_pos.setValue(0.0)
@@ -1200,30 +1282,84 @@ class DevToolsScreen(QWidget):
         self.lbl_homing_status.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold; font-size: 11px;")
         self._log_terminal(f"Commanded Carriage HOME (Searching PB13, Backoff Slack: {slack:.1f} mm)")
 
+    def _load_captured_points(self):
+        try:
+            if os.path.exists(CAPTURED_LUT_PATH):
+                with open(CAPTURED_LUT_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    pts = []
+                    for item in data:
+                        if isinstance(item, (list, tuple)) and len(item) >= 3:
+                            pts.append((float(item[0]), float(item[1]), float(item[2])))
+                    pts.sort(key=lambda x: x[0])
+                    return pts
+        except Exception:
+            pass
+        return []
+
+    def _save_captured_points(self):
+        try:
+            os.makedirs(os.path.dirname(CAPTURED_LUT_PATH), exist_ok=True)
+            with open(CAPTURED_LUT_PATH, "w", encoding="utf-8") as f:
+                json.dump([[p, f_lbs, tau] for (p, f_lbs, tau) in self.captured_lut_points], f, indent=2)
+        except Exception:
+            pass
+
+    def _load_flashed_brake_lut(self):
+        """Parse active s_brake_torque_to_pos_mm[66] and K_tau from firmware/Core/Inc/brake_lut.h."""
+        lut_torques = np.linspace(0.0, 325.0, 66)
+        lut_path = os.path.join(REPO_ROOT, "firmware", "Core", "Inc", "brake_lut.h")
+        k_plant = 72.39
+        try:
+            with open(lut_path, "r", encoding="utf-8") as f:
+                txt = f.read()
+            m_k = re.search(r"#define\s+BRAKE_SYSTEM_GAIN_LBF_IN_PER_MM\s+([0-9.]+)f?", txt)
+            if m_k:
+                k_plant = float(m_k.group(1))
+            m_arr = re.search(r"s_brake_torque_to_pos_mm\s*\[\s*BRAKE_LUT_NUM_ENTRIES\s*\]\s*=\s*\{([^}]+)\}", txt, re.S)
+            if m_arr:
+                nums = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?=f?\b)", m_arr.group(1))]
+                if len(nums) == 66:
+                    return lut_torques, np.asarray(nums, dtype=float), max(1.0, k_plant)
+        except Exception:
+            pass
+        xs = np.linspace(0.0, 325.0, 66)
+        ys = np.where(xs > 0.0, np.clip(8.586 + xs / k_plant, 0.0, 28.0), 0.0)
+        return xs, ys, k_plant
+
     # ─────────────────────────────────────────────────────────
     # Single-Curl Torque Calibration Workflow
     # ─────────────────────────────────────────────────────────
     def _reset_curl_peak(self):
         self.peak_curl_force = 0.0
         self.peak_curl_torque = 0.0
-        self.lbl_peak_force.setText("0.0 lbs")
         self.lbl_peak_torque.setText("0.0 lbf·in")
         self.line_strip_peak.setValue(0.0)
         self._log_terminal("Reset peak curl force & torque latch to 0.0.")
 
-    def _capture_current_point(self):
-        pos = round(self.live_carriage_mm, 2)
-        force = round(self.peak_curl_force if self.chk_auto_peak.isChecked() else self.live_force, 2)
+    def _add_lut_point(self, pos_mm: float, force_lbs: float, source: str = "Captured"):
+        pos = round(float(pos_mm), 2)
+        force = round(float(force_lbs), 2)
         torque = round(force * self.forearm_length_in, 2)
 
-        # Replace existing point at exact position if already present
+        # Replace existing point at same position within 0.05 mm
         self.captured_lut_points = [p for p in self.captured_lut_points if abs(p[0] - pos) > 0.05]
         self.captured_lut_points.append((pos, force, torque))
         self.captured_lut_points.sort(key=lambda x: x[0])
 
+        self._save_captured_points()
         self._refresh_lut_table()
         self._update_plot_curve()
-        self._log_terminal(f"Captured Point: Pos={pos:.2f} mm -> Force={force:.2f} lbs -> Torque={torque:.1f} lbf·in")
+        self._update_torque_and_displacement_preview()
+        self._log_terminal(f"{source} Point: Pos={pos:.2f} mm -> Force={force:.2f} lbs (@ {self.forearm_length_in:.0f}\") -> Torque={torque:.1f} lbf·in")
+
+    def _capture_current_point(self):
+        force = self.peak_curl_force if self.chk_auto_peak.isChecked() else self.live_force
+        self._add_lut_point(self.live_carriage_mm, force, source="Captured")
+
+    def _add_manual_lut_point(self):
+        self._add_lut_point(self.spin_lut_pos.value(), self.spin_lut_force.value(), source="Manual")
 
     def _refresh_lut_table(self):
         self.table_lut.setRowCount(len(self.captured_lut_points))
@@ -1250,57 +1386,96 @@ class DevToolsScreen(QWidget):
     def _delete_lut_point(self, row_idx):
         if 0 <= row_idx < len(self.captured_lut_points):
             del self.captured_lut_points[row_idx]
+            self._save_captured_points()
             self._refresh_lut_table()
             self._update_plot_curve()
+            self._update_torque_and_displacement_preview()
             self._log_terminal(f"Deleted calibration point at row {row_idx + 1}")
 
     def _clear_captured_points(self):
         self.captured_lut_points.clear()
+        self._save_captured_points()
         self._refresh_lut_table()
         self._update_plot_curve()
+        self._update_torque_and_displacement_preview()
         self._log_terminal("Cleared all captured LUT calibration points.")
 
     def _update_plot_curve(self):
         pts = self.captured_lut_points
-        xs = np.linspace(-10.0, 25.0, 150)
-
-        if len(pts) >= 2:
+        if pts:
             p_arr = np.array([p[0] for p in pts])
             tau_arr = np.array([p[2] for p in pts])
-
             self.scatter_points.setData(p_arr, tau_arr)
-
-            # Fit cubic polynomial with monotonicity enforcement
-            try:
-                poly = np.polyfit(p_arr, tau_arr, min(3, len(pts) - 1))
-                ys = np.polyval(poly, xs)
-                ys = np.maximum(0.0, ys)
-
-                # Estimate stiffness / system gain in lbf·in/mm above 6 mm
-                mask = (p_arr >= 6.0)
-                if np.sum(mask) >= 2:
-                    slope, _ = np.polyfit(p_arr[mask], tau_arr[mask], 1)
-                    k_sys = max(1.0, slope)
-                else:
-                    k_sys = max(1.0, (tau_arr[-1] - tau_arr[0]) / max(1.0, (p_arr[-1] - p_arr[0])))
-
-                self.lbl_system_gain.setText(f"System Gain (K_tau): {k_sys:.1f} lbf·in/mm")
-                self.lbl_sensitivity.setText(f"Sensitivity: {1.0 / k_sys:.3f} mm/(lbf·in)")
-            except Exception:
-                ys = np.zeros_like(xs)
         else:
             self.scatter_points.setData([], [])
-            # Nominal torque model: 0 below 6 mm, ramps up to 300 lbf·in at 13 mm
-            ys = np.zeros_like(xs)
-            mask = xs > 6.0
-            ys[mask] = 30.0 * (xs[mask] - 6.0) ** 1.3
-            ys = np.clip(ys, 0.0, 325.0)
 
-            k_plant = 72.39
-            self.lbl_system_gain.setText(f"System Gain (K_tau): {k_plant:.1f} lbf·in/mm (Nominal)")
-            self.lbl_sensitivity.setText(f"Sensitivity: {1.0 / k_plant:.3f} mm/(lbf·in) (Nominal)")
+        if len(pts) >= 2:
+            try:
+                lut_torques = np.linspace(0.0, 325.0, 66)
+                fitted_pos, k_tau = self._compute_monotonic_lut(lut_torques)
+                self.plot_widget.setXRange(-5.0, max(28.0, float(np.max(fitted_pos)) + 2.0))
+                self.curve_model.setData(fitted_pos, lut_torques)
+                self.lbl_system_gain.setText(f"System Gain (K_tau): {k_tau:.1f} lbf·in/mm (Fitted)")
+                self.lbl_sensitivity.setText(f"Sensitivity: {1.0 / k_tau:.3f} mm/(lbf·in) (Fitted)")
+                return
+            except Exception:
+                pass
 
-        self.curve_model.setData(xs, ys)
+        # Show actual flashed firmware table from brake_lut.h when < 2 new points exist
+        lut_torques, flashed_pos, k_plant = self._load_flashed_brake_lut()
+        self.plot_widget.setXRange(-5.0, max(28.0, float(np.max(flashed_pos)) + 2.0))
+        self.curve_model.setData(flashed_pos, lut_torques)
+        self.lbl_system_gain.setText(f"System Gain (K_tau): {k_plant:.1f} lbf·in/mm (brake_lut.h)")
+        self.lbl_sensitivity.setText(f"Sensitivity: {1.0 / k_plant:.3f} mm/(lbf·in) (brake_lut.h)")
+
+    def _compute_monotonic_lut(self, lut_torques):
+        """
+        Build a strictly monotonic torque -> stepper position table (mm) from captured/manual points.
+        Collapses zero-load slack points cleanly and extrapolates linearly above the highest point.
+        Returns (fitted_pos_mm_array, estimated_k_tau_lbf_in_per_mm).
+        """
+        pts = sorted(self.captured_lut_points, key=lambda x: x[0])
+        zero_positions = [p for p, _, tau in pts if tau <= 0.05]
+        slack_edge_mm = max(zero_positions) if zero_positions else 0.0
+
+        active_pts = [(p, tau) for p, _, tau in pts if tau > 0.05]
+        tau_anchor = []
+        pos_anchor = []
+        if slack_edge_mm > 0.0 or not active_pts:
+            tau_anchor.append(0.0)
+            pos_anchor.append(slack_edge_mm)
+        else:
+            tau_anchor.append(0.0)
+            pos_anchor.append(0.0)
+
+        for p, tau in active_pts:
+            # Enforce strictly increasing torque & non-decreasing position for np.interp stability
+            if tau <= tau_anchor[-1] + 1e-3:
+                pos_anchor[-1] = max(pos_anchor[-1], p)
+            elif p >= pos_anchor[-1]:
+                tau_anchor.append(float(tau))
+                pos_anchor.append(float(p))
+
+        tau_arr = np.asarray(tau_anchor, dtype=float)
+        pos_arr = np.asarray(pos_anchor, dtype=float)
+        fitted_pos = np.interp(lut_torques, tau_arr, pos_arr)
+
+        # Extrapolate linearly above the max captured torque using active-zone slope
+        if len(tau_arr) >= 2:
+            d_tau = tau_arr[-1] - tau_arr[-2]
+            d_pos = pos_arr[-1] - pos_arr[-2]
+            inv_slope = (d_pos / d_tau) if (d_tau > 1e-3 and d_pos > 1e-5) else (1.0 / 72.39)
+            hi_mask = lut_torques > tau_arr[-1]
+            fitted_pos[hi_mask] = pos_arr[-1] + (lut_torques[hi_mask] - tau_arr[-1]) * inv_slope
+            k_tau = (d_tau / d_pos) if d_pos > 1e-5 else 72.39
+        else:
+            k_tau = 72.39
+
+        # Entry 0 (0.0 lbf*in) always commands 0.0 mm release; clamp travel safely to [0.0, 28.0] mm
+        fitted_pos = np.clip(fitted_pos, 0.0, 28.0)
+        if len(fitted_pos) > 0 and lut_torques[0] <= 0.0:
+            fitted_pos[0] = 0.0
+        return fitted_pos, float(max(1.0, k_tau))
 
     def _fit_and_export_lut(self):
         """Fit captured torque points, format C array, and write to brake_lut.h."""
@@ -1308,21 +1483,13 @@ class DevToolsScreen(QWidget):
             QMessageBox.warning(
                 self,
                 "Insufficient Points",
-                "Please capture at least 2 calibration points across carriage displacement."
+                "Please capture or enter at least 2 calibration points across carriage displacement."
             )
             return
 
-        pts = sorted(self.captured_lut_points, key=lambda x: x[0])
-        p_arr = np.array([p[0] for p in pts])
-        tau_arr = np.array([p[2] for p in pts])
-
-        # Generate 66-point LUT for target torque [0.0, 325.0 lbf*in in 5.0 steps]
         lut_torques = np.linspace(0.0, 325.0, 66)
         try:
-            # Anchor 0 torque to 0.0 mm
-            tau_anchor = np.concatenate(([0.0], tau_arr))
-            pos_anchor = np.concatenate(([0.0], p_arr))
-            fitted_pos = np.interp(lut_torques, tau_anchor, pos_anchor)
+            fitted_pos, k_tau = self._compute_monotonic_lut(lut_torques)
         except Exception as e:
             QMessageBox.critical(self, "Fitting Error", f"Interpolation failed: {e}")
             return
@@ -1351,7 +1518,7 @@ extern "C" {{
 
 #include <stdint.h>
 
-#define BRAKE_SYSTEM_GAIN_LBF_IN_PER_MM   72.39f
+#define BRAKE_SYSTEM_GAIN_LBF_IN_PER_MM   {k_tau:.2f}f
 #define BRAKE_SLACK_TAKEUP_MM             2.50f
 #define BRAKE_LUT_MIN_TORQUE_LBF_IN       0.0f
 #define BRAKE_LUT_MAX_TORQUE_LBF_IN       325.0f
@@ -1387,7 +1554,7 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             with open(lut_file_path, "w") as f:
                 f.write(header_content)
 
-            self._log_terminal(f"Exported calibrated Torque LUT (66 entries) to {lut_file_path}")
+            self._log_terminal(f"Exported calibrated Torque LUT (66 entries, K_tau={k_tau:.1f} lbf·in/mm) to {lut_file_path}")
             QMessageBox.information(
                 self,
                 "LUT Exported",
@@ -1414,6 +1581,41 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
         except Exception as e:
             self._log_terminal(f"ERROR: Failed to run pio: {e}")
             QMessageBox.critical(self, "Execution Error", f"Could not launch PlatformIO: {e}")
+
+    def _flash_firmware(self):
+        """Compile firmware, jump MCU to DFU if connected, flash via dfu-util, and reconnect."""
+        fw_dir = os.path.join(REPO_ROOT, "firmware")
+        self._log_terminal("Compiling firmware before DFU flash...")
+        try:
+            build = subprocess.run(["pio", "run", "-d", fw_dir], capture_output=True, text=True, timeout=60)
+            if build.returncode != 0:
+                self._log_terminal(f"ERROR: Build failed:\n{build.stderr}")
+                QMessageBox.critical(self, "Build Failed", f"Build failed (flash aborted):\n{build.stderr[:500]}")
+                return
+
+            if self.hw and self.hw.is_connected:
+                self._log_terminal("Rebooting MCU into ROM DFU bootloader...")
+                self.hw.send_command("DFU")
+                time.sleep(0.15)
+                self.hw.disconnect()
+                time.sleep(1.5)
+
+            self._log_terminal("Uploading firmware via DFU (pio run -d firmware -t upload)...")
+            up = subprocess.run(["pio", "run", "-d", fw_dir, "-t", "upload"], capture_output=True, text=True, timeout=60)
+            if up.returncode == 0:
+                self._log_terminal("SUCCESS: Firmware flashed to STM32! Reconnecting USB...")
+                time.sleep(1.5)
+                self._probe_hardware()
+                QMessageBox.information(self, "Flash Complete", "Firmware built and flashed to STM32!")
+            else:
+                self._log_terminal(f"ERROR: DFU upload failed:\n{up.stderr or up.stdout}")
+                QMessageBox.critical(
+                    self, "DFU Upload Failed",
+                    f"Upload failed (hold BOOT0 if not in DFU mode):\n{(up.stderr or up.stdout)[-500:]}"
+                )
+        except Exception as e:
+            self._log_terminal(f"ERROR: Flash failed: {e}")
+            QMessageBox.critical(self, "Flash Error", f"Failed to flash firmware: {e}")
 
     # ─────────────────────────────────────────────────────────
     # Telemetry & Hardware Communication
@@ -1544,15 +1746,9 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             self.lbl_homing_status.setText("🛑 Limit Switch PB13 Hit -> Cancelled & Returning Home to 0.0 mm")
             self.lbl_homing_status.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; font-size: 11px;")
             self._log_terminal(f"🛑 [HARDWARE LIMIT E-STOP] {line.strip()} - Everything cancelled, returning to 30 mm slack home.")
-        elif "ALERT:DESCENT_ARREST" in line:
-            self.lbl_arrest_banner.setVisible(True)
-            self.lbl_arrest_banner.setText(f"🛑 DESCENT DROP ARREST ENGAGED: Rapid drop detected! Brake locked forward to halt handle.")
-            self._log_terminal(f"⚠️ [SAFETY ALERT] {line.strip()} - Descent drop arrest triggered! Brake locked.")
-        elif "ACK:DESCENT_ARREST:RELEASED" in line or "ACK:RESET_ARREST" in line:
-            self.lbl_arrest_banner.setVisible(False)
-            self._log_terminal("[SAFETY] Descent drop arrest released - normal control restored.")
         elif "ACK:DIR:" in line:
             is_inv = "1" in line
+            self._dev_cfg = save_dev_config({"dir_inverted": is_inv})
             self.lbl_dir_status.setText(f"DIR: {'Standard (+mm Tightens)' if is_inv else 'Inverted (-mm Tightens)'}")
             self.lbl_dir_status.setStyleSheet(f"color: {COLORS['accent'] if is_inv else COLORS['warning']}; font-weight: bold; font-size: 11px;")
         elif "ACK:HOME:" in line:
@@ -1605,23 +1801,28 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             self._log_terminal(f"[MCU] Target Torque Acknowledged: {line[11:].strip()} lbf·in")
         elif "ACK:ARM:" in line:
             self._log_terminal(f"[MCU] Forearm Lever Setting Acknowledged: {line[8:].strip()} inches")
-        elif "ACK:ARRESTTHR:" in line:
-            self._log_terminal(f"[MCU] Descent Drop Threshold set to {line[14:].strip()} deg/s")
         elif "ACK:STOP" in line:
             self.lbl_homing_status.setText("● EMERGENCY STOPPED")
             self.lbl_homing_status.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; font-size: 11px;")
+        elif "ACK:CURR:" in line:
+            self._log_terminal(f"[TMC2209] Run Current set: {line[9:].strip()}")
         elif "ACK:TMC:" in line:
             self._log_terminal(f"[TMC2209 Status] {line[8:]}")
             if "ONLINE=1" in line:
                 sg_val = "---"
-                if "SG=" in line:
-                    try:
-                        sg_val = line.split("SG=")[1].split(",")[0]
-                    except Exception:
-                        pass
+                cfg_ma = str(int(self._dev_cfg.get("run_curr_ma", 1500)))
+                standby = "0"
+                for tok in line.split(","):
+                    if tok.startswith("SG="):
+                        sg_val = tok.split("=", 1)[1].strip()
+                    elif tok.startswith("CFG_MA="):
+                        cfg_ma = tok.split("=", 1)[1].strip()
+                    elif tok.startswith("STANDBY="):
+                        standby = tok.split("=", 1)[1].strip()
+                pwr_txt = "Standby 500mA @0mm" if standby == "1" else f"Active {cfg_ma}mA"
                 self.lbl_hud_tmc_val.setText(f"ONLINE (SG: {sg_val})")
                 self.lbl_hud_tmc_val.setStyleSheet(f"color: {COLORS['accent']}; font-size: 13px; font-weight: bold; border: none;")
-                self.lbl_hud_tmc_sub.setText("UART 115.2k | StealthChop")
+                self.lbl_hud_tmc_sub.setText(f"{pwr_txt} | StealthChop")
             else:
                 self.lbl_hud_tmc_val.setText("OFFLINE")
                 self.lbl_hud_tmc_val.setStyleSheet(f"color: {COLORS['danger']}; font-size: 13px; font-weight: bold; border: none;")

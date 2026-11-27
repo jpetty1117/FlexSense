@@ -9,6 +9,8 @@ USB serial interface and sliding-window binary telemetry parser
 for the STM32F401RE FlexSense encoder subsystem.
 """
 
+import os
+import json
 import time
 import glob
 import struct
@@ -17,6 +19,47 @@ try:
     import serial
 except ImportError:
     serial = None
+
+CALIBRATION_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "calibration"))
+DEV_CONFIG_PATH = os.path.join(CALIBRATION_DIR, "dev_config.json")
+DEFAULT_DEV_CONFIG = {
+    "run_curr_ma": 1500,
+    "homing_curr_ma": 800,
+    "homing_speed_us": 350,
+    "homing_slack_mm": 30.0,
+    "dir_inverted": True,
+}
+
+
+def load_dev_config() -> dict:
+    """Load persistent Dev & Calibration parameters shared with Live Test."""
+    cfg = dict(DEFAULT_DEV_CONFIG)
+    try:
+        if os.path.exists(DEV_CONFIG_PATH):
+            with open(DEV_CONFIG_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                for k in cfg:
+                    if k in raw:
+                        cfg[k] = raw[k]
+    except Exception:
+        pass
+    return cfg
+
+
+def save_dev_config(updates: dict) -> dict:
+    """Merge and persist Dev & Calibration parameters to calibration/dev_config.json."""
+    cfg = load_dev_config()
+    for k, v in updates.items():
+        if k in DEFAULT_DEV_CONFIG:
+            cfg[k] = v
+    try:
+        os.makedirs(CALIBRATION_DIR, exist_ok=True)
+        with open(DEV_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception:
+        pass
+    return cfg
 
 
 def compute_crc16(data: bytes) -> int:
@@ -111,11 +154,10 @@ class STM32EncoderInterface:
             self.crc_errors = 0
             time.sleep(0.05)
             self.ser.reset_input_buffer()
-            # Send STOP to ensure it starts in IDLE
+            # Send STOP to ensure it starts in IDLE, then sync shared Dev settings
             self.send_command("STOP")
             time.sleep(0.02)
-            # Ensure 1.3 A driver current limit is configured over UART to TMC2209
-            self.set_driver_current(1.3)
+            self.apply_dev_config()
             return True, f"Connected to {target_port}"
         except Exception as e:
             self.is_connected = False
@@ -165,12 +207,12 @@ class STM32EncoderInterface:
             return False
         return self.send_command(f"RES {float(resistance_lbs):.2f}")
 
-    def set_driver_current(self, current_a: float = 1.3) -> bool:
+    def set_driver_current(self, current_a: float = 1.5) -> bool:
         """
-        Configure TMC2209 coil current limit over UART (e.g. 1.3 A).
+        Configure TMC2209 coil current limit over UART (e.g. 1.5 A or 1500 mA).
 
         Parameters:
-            current_a (float): Current limit in Amperes (e.g. 1.3) or mA (1300).
+            current_a (float): Current limit in Amperes (e.g. 1.5) or mA (1500).
 
         Returns:
             bool: True if transmitted successfully.
@@ -180,23 +222,33 @@ class STM32EncoderInterface:
         ma = int(current_a * 1000) if current_a < 10.0 else int(current_a)
         return self.send_command(f"CURR {ma}")
 
+    def apply_dev_config(self, cfg: dict = None) -> bool:
+        """Apply shared Dev & Calibration settings to the MCU so Dev and Live Test stay in sync."""
+        if not self.is_connected:
+            return False
+        c = cfg if cfg is not None else load_dev_config()
+        self.send_command(f"CURR {int(c['run_curr_ma'])}")
+        self.send_command(f"HOMECURR {int(c['homing_curr_ma'])}")
+        self.send_command(f"HOMESPEED {int(c['homing_speed_us'])}")
+        self.send_command(f"HOMESLACK {float(c['homing_slack_mm']):.1f}")
+        self.send_command(f"DIR {1 if c['dir_inverted'] else 0}")
+        return True
+
     def start_streaming(self, target_resistance: float = None):
-        """Zero the encoder, configure resistance, and command the STM32 to begin 50 Hz binary telemetry stream."""
+        """Zero/tare via START, configure resistance, and begin 100 Hz binary telemetry stream."""
         if not self.is_connected:
             ok, _ = self.connect()
             if not ok:
                 return False
-        # Purge any stale bytes left in the OS serial buffer before starting
+        # Clear stale RX bytes before starting, without dropping just-sent TX commands (e.g. ARM)
         if self.ser and self.ser.is_open:
             try:
                 self.ser.reset_input_buffer()
-                self.ser.reset_output_buffer()
             except Exception:
                 pass
         self.rx_buffer.clear()
         self.rx_text_lines.clear()
         self.last_timestamp_ms = 0
-        self.send_command("ZERO")
         if target_resistance is not None:
             self.set_resistance(target_resistance)
         self.send_command("START")

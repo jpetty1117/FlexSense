@@ -448,18 +448,22 @@ class HistoryViewerScreen(QWidget):
         self.curve_rom.setData(timestamps, rom)
         self.curve_vel.setData(timestamps, speed)
 
-        # Set sensible default ranges
-        self.plot_rom.setXRange(float(timestamps[0]), float(timestamps[-1]), padding=0)
-        self.plot_rom.setYRange(-10, float(session['target_angle']) + 20, padding=0)
-        
-        speed_abs_max = max(abs(float(speed.min())), abs(float(speed.max())))
+        # Set sensible non-degenerate axis bounds
+        t_start = float(timestamps[0])
+        t_end = float(timestamps[-1]) if float(timestamps[-1]) > t_start else (t_start + 1.0)
+        self.plot_rom.setXRange(t_start, t_end, padding=0)
+        self.plot_rom.setYRange(-10.0, max(30.0, float(rom.max()) + 15.0, float(session['target_angle']) + 20.0), padding=0)
+
+        speed_abs_max = max(abs(float(speed.min())), abs(float(speed.max())), 10.0)
         self.plot_vel.setYRange(-speed_abs_max * 1.1, speed_abs_max * 1.1, padding=0)
 
-        # Update graph 2
+        # Update graph 2 (handle missing/0% SpO2 readings safely without inverted bounds)
         self.curve_spo2.setData(timestamps, spo2)
-        self.plot_spo2.setXRange(float(timestamps[0]), float(timestamps[-1]))
-        self.plot_spo2.setYRange(
-            max(90, float(spo2.min()) - 1),
-            min(100, float(spo2.max()) + 1),
-            padding=0,
-        )
+        self.plot_spo2.setXRange(t_start, t_end, padding=0)
+        valid_spo2 = spo2[spo2 > 0.0]
+        if len(valid_spo2) > 0:
+            spo2_lo = max(0.0, float(valid_spo2.min()) - 2.0)
+            spo2_hi = min(100.0, max(spo2_lo + 5.0, float(valid_spo2.max()) + 2.0))
+        else:
+            spo2_lo, spo2_hi = 0.0, 100.0
+        self.plot_spo2.setYRange(spo2_lo, spo2_hi, padding=0)

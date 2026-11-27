@@ -22,25 +22,25 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Physical Plant & Drivetrain Model Constants */
-#define G_BRAKE_NOMINAL             1.75f     /* Dimensionless brake gain */
-#define K_SPRING_NOMINAL            1.25f     /* lbf / mm */
-#define K_PLANT_NOMINAL             (G_BRAKE_NOMINAL * K_SPRING_NOMINAL) /* 2.1875 lbf / mm */
-#define X_SLACK_MM                  2.5f      /* mm of initial carriage take-up */
+/* Physical Plant & Drivetrain Model Constants (Measured 0.70 lbf/mm spring: ~15 lbs @ 15 mm from home) */
+#define G_BRAKE_NOMINAL             2.86f     /* Dimensionless effective brake gain in biting phase */
+#define K_SPRING_NOMINAL            0.70f     /* lbf / mm (installed SEA extension spring) */
+#define K_PLANT_NOMINAL             (G_BRAKE_NOMINAL * K_SPRING_NOMINAL) /* ~2.00 lbf / mm */
+#define X_SLACK_MM                  7.5f      /* mm of nominal clearance / take-up before pad bite */
 #define X_MIN_TRAVEL_MM             -25.0f    /* mm minimum allowed travel for negative calibration & backlash */
-#define X_MAX_TRAVEL_MM             35.0f     /* mm maximum allowed travel */
+#define X_MAX_TRAVEL_MM             28.0f     /* mm maximum allowed travel (2 mm margin inside 30 mm PB13 limit) */
 
-/* Laplace-Tuned Closed-Loop Feedback Constants */
-#define KP_FORCE                    0.091f    /* mm / lbf (proportional gain) */
-#define KI_FORCE                    1.64f     /* mm / (lbf * s) (integral gain) */
+/* Laplace-Tuned Closed-Loop Feedback Constants (Modulus Optimum: tau=0.080s, wc=3.0 rad/s, K_plant=2.0 lbf/mm) */
+#define KP_FORCE                    0.120f    /* mm / lbf (proportional gain) */
+#define KI_FORCE                    1.50f     /* mm / (lbf * s) (integral gain) */
 #define FORCE_DEADBAND_LBS          0.50f     /* +/- 0.5 lbf deadband */
 #define VELOCITY_GATE_DEG_S         3.0f      /* deg/s minimum joint speed */
 #define FORCE_GATE_LBS              0.50f     /* lbf minimum patient applied load */
-#define INTEGRAL_MAX_TRIM_MM        3.0f      /* mm maximum feedback trim */
-#define MAX_SLEW_VELOCITY_MM_S      15.0f     /* mm/s smooth normal linear slew speed */
+#define INTEGRAL_MAX_TRIM_MM        2.0f      /* mm maximum feedback trim (+/- 4 lbf @ 2.0 lbf/mm plant) */
+#define MAX_SLEW_VELOCITY_MM_S      15.0f     /* mm/s smooth normal linear slew speed (engaging) */
 #define MAX_ACCELERATION_MM_S2      45.0f     /* mm/s^2 smooth trapezoidal acceleration ramp (~0.33 s to full speed) */
-#define ARREST_SLEW_VELOCITY_MM_S   25.0f     /* mm/s emergency drop-arrest lockup speed */
-#define ARREST_ACCELERATION_MM_S2   200.0f    /* mm/s^2 emergency drop-arrest acceleration */
+#define MAX_RELEASE_VELOCITY_MM_S   25.0f     /* mm/s crisp retraction speed when letting go on descent */
+#define MAX_RELEASE_ACCEL_MM_S2     120.0f    /* mm/s^2 fast release acceleration so brake clears during lowering */
 #define MIN_SLEW_VELOCITY_MM_S      0.5f      /* mm/s minimum crawling speed */
 
 /* Stepper Motor & Lead Screw Mechanical Geometry */
@@ -73,8 +73,9 @@ extern "C" {
 #define MOTOR_EN_INACTIVE_LEVEL     GPIO_PIN_SET
 
 /* TMC2209 UART Current Limits */
-#define TMC2209_DEFAULT_RUN_CURRENT_MA 1300   /* 1.3 A RMS driver coil current limit */
-#define TMC2209_DEFAULT_HOLD_PERCENT   50     /* 50% hold current at standstill */
+#define TMC2209_DEFAULT_RUN_CURRENT_MA 1500   /* 1.5 A RMS active run current limit */
+#define TMC2209_STANDBY_RUN_CURRENT_MA 500    /* 0.5 A RMS standby current when parked at 0.0 mm */
+#define TMC2209_DEFAULT_HOLD_PERCENT   40     /* 40% hold current at standstill */
 
 #include "tmc2209.h"
 
@@ -88,9 +89,6 @@ float    Motor_GetTargetTorqueLbfIn(void);
 void     Motor_SetCommandedPositionMm(float pos_mm);
 void     Motor_ZeroPosition(void);
 float    Motor_GetTargetResistanceLbs(void);
-bool     Motor_IsDescentArrestActive(void);
-void     Motor_ResetDescentArrest(void);
-void     Motor_SetDescentArrestThreshold(float max_neg_vel_deg_s);
 float    Motor_GetCommandedPositionMm(void);
 float    Motor_GetCurrentPositionMm(void);
 float    Motor_GetCurrentVelocityMmS(void);
@@ -108,6 +106,8 @@ bool     Motor_IsTMC2209Online(void);
 uint16_t Motor_GetStallGuardResult(void);
 bool     Motor_GetTMC2209Status(TMC2209_Status_t *status);
 bool     Motor_SetDriverCurrent(uint16_t run_mA, uint8_t hold_percent);
+uint16_t Motor_GetConfiguredRunCurrentMa(void);
+bool     Motor_IsStandbyCurrent(void);
 bool     Motor_SetDriverStealthChop(bool enable);
 bool     Motor_SetDriverCoolStep(uint8_t semin, uint8_t semax);
 bool     Motor_SetDriverStallGuardThreshold(uint8_t threshold);

@@ -189,23 +189,6 @@ int main(void)
         }
         break;
 
-      case CMD_RESET_ARREST:
-        {
-          Motor_ResetDescentArrest();
-          Telemetry_SendAck("ACK:RESET_ARREST:OK\r\n");
-        }
-        break;
-
-      case CMD_SET_ARREST_THRESH:
-        {
-          float thr = Telemetry_GetCommandParam();
-          Motor_SetDescentArrestThreshold(thr);
-          char ack[48];
-          snprintf(ack, sizeof(ack), "ACK:ARRESTTHR:%.1f\r\n", thr);
-          Telemetry_SendAck(ack);
-        }
-        break;
-
       case CMD_SET_POSITION:
         {
           float pos_mm = Telemetry_GetCommandParam();
@@ -244,7 +227,7 @@ int main(void)
         break;
 
       case CMD_HELP:
-        Telemetry_SendAck("ACK:HELP:START,STOP,ZERO,ZEROPOS,TARE,PINGLC,STATUS,TMC,SPO2,HOME,RES,TORQ,ARM,POS,CURR,DIR,INVERT,HOMESLACK,HOMECURR,HOMESPEED,HOMETHR,ARRESTTHR,RESETARREST,DFU\r\n");
+        Telemetry_SendAck("ACK:HELP:START,STOP,ZERO,ZEROPOS,TARE,PINGLC,STATUS,TMC,SPO2,HOME,RES,TORQ,ARM,POS,CURR,DIR,INVERT,HOMESLACK,HOMECURR,HOMESPEED,HOMETHR,DFU\r\n");
         break;
 
       case CMD_TMC:
@@ -263,13 +246,15 @@ int main(void)
             TMC2209_ReadRegister(TMC2209_REG_DRV_STATUS, &drv_status);
 
             snprintf(tmc_msg, sizeof(tmc_msg),
-                     "ACK:TMC:ONLINE=1,IFCNT=%lu,GCONF=0x%lX,GSTAT=0x%lX,IOIN=0x%lX,IHOLD=0x%lX,DRV=0x%lX,SG=%u,CS=%u,OTPW=%d,FAULT=%d,STST=%d\r\n",
+                     "ACK:TMC:ONLINE=1,IFCNT=%lu,GCONF=0x%lX,GSTAT=0x%lX,IOIN=0x%lX,IHOLD=0x%lX,DRV=0x%lX,SG=%u,CS=%u,OTPW=%d,FAULT=%d,STST=%d,CFG_MA=%u,STANDBY=%d\r\n",
                      (unsigned long)ifcnt, (unsigned long)gconf, (unsigned long)gstat,
                      (unsigned long)ioin, (unsigned long)ihold_irun, (unsigned long)drv_status,
                      st.stallguard_result, st.current_scale,
                      st.over_temperature_warning ? 1 : 0,
                      st.driver_fault ? 1 : 0,
-                     st.standstill ? 1 : 0);
+                     st.standstill ? 1 : 0,
+                     Motor_GetConfiguredRunCurrentMa(),
+                     Motor_IsStandbyCurrent() ? 1 : 0);
           }
           else
           {
@@ -298,7 +283,7 @@ int main(void)
           {
             current_ma = 2000;
           }
-          bool ok = Motor_SetDriverCurrent(current_ma, 50);
+          bool ok = Motor_SetDriverCurrent(current_ma, TMC2209_DEFAULT_HOLD_PERCENT);
           char curr_ack[64];
           snprintf(curr_ack, sizeof(curr_ack), "ACK:CURR:%u_MA:%s\r\n", current_ma, ok ? "OK" : "ERR");
           Telemetry_SendAck(curr_ack);
