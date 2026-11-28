@@ -14,6 +14,7 @@
 #include "motor.h"
 #include "brake_lut.h"
 #include "telemetry.h"
+#include "tim.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -28,10 +29,9 @@ static float            s_current_pos_mm        = 0.0f;
 static float            s_current_vel_mm_s      = 0.0f;
 static float            s_filt_force_lbs        = 0.0f;
 
-static int32_t          s_target_step           = 0;
-static int32_t          s_current_step          = 0;
-static uint32_t         s_last_step_cycle       = 0;
-static uint32_t         s_step_interval_cycles  = 0;
+static volatile int32_t  s_target_step          = 0;
+static volatile int32_t  s_current_step         = 0;
+static volatile uint32_t s_step_interval_us     = 2000U;
 
 static float            s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 static bool             s_motor_enabled         = false;
@@ -46,9 +46,11 @@ static float            s_forearm_length_in     = 12.0f; /* Default Pin 4: 12.0 
 static float            s_target_torque_lbf_in  = 0.0f;
 static bool             s_curl_reversing        = false;
 static uint32_t         s_curl_stopped_ms       = 0;
+static uint32_t         s_apex_unload_ms        = 0;
+static float            s_min_curl_angle_deg    = 0.0f;
 static bool             s_limit_was_triggered   = false;
-static uint8_t          s_limit_debounce        = 0;
-static uint8_t          s_limit_release_cnt     = 0;
+static uint32_t         s_limit_press_ms        = 0;
+static uint32_t         s_limit_release_ms      = 0;
 
 /* TMC2209 UART State */
 static bool             s_tmc_online            = false;
@@ -156,20 +158,26 @@ void Motor_Init(void)
   s_filt_force_lbs        = 0.0f;
   s_target_step           = 0;
   s_current_step          = 0;
-  s_last_step_cycle       = DWT->CYCCNT;
-  s_step_interval_cycles  = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
+  s_step_interval_us      = 2000U;
   s_motor_enabled         = false;
   s_curl_reversing        = false;
   s_curl_stopped_ms       = 0;
+  s_apex_unload_ms        = 0;
+  s_min_curl_angle_deg    = 0.0f;
   s_limit_was_triggered   = Motor_IsLimitSwitchTriggered();
-  s_limit_debounce        = 0;
-  s_limit_release_cnt     = 0;
+  s_limit_press_ms        = 0;
+  s_limit_release_ms      = 0;
   s_is_homing             = false;
   s_is_standby_current    = false;
   s_dir_inverted          = true;  /* Default inverted polarity so homing search retracts towards limit switch */
   s_steps_per_mm          = MOTOR_STEPS_PER_MM;
 
   motor_apply_dynamic_current(false); /* Drop IRUN to 500 mA standby while parked at 0.0 mm */
+
+  /* 7. Start 1 MHz hardware TIM3 stepper pulse generator for jitter-free motion */
+  MX_TIM3_Init();
+  __HAL_TIM_CLEAR_FLAG(&htim3, TIM_FLAG_UPDATE);
+  HAL_TIM_Base_Start_IT(&htim3);
 } /* Motor_Init() */
 
 /* Command target shaft braking torque directly in lbf*in
@@ -190,6 +198,7 @@ void Motor_SetTorqueLbfIn(float torque_lbf_in)
   s_direct_pos_active = false;
   s_curl_reversing    = false;
   s_curl_stopped_ms   = 0;
+  s_apex_unload_ms    = 0;
   if ( torque_lbf_in < 0.0f )
   {
     torque_lbf_in = 0.0f;
@@ -330,14 +339,40 @@ void Motor_SetCommandedPositionMm(float pos_mm)
 */
 void Motor_ZeroPosition(void)
 {
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
   s_current_step           = 0;
   s_target_step            = 0;
+  s_step_interval_us       = 2000U;
+  if ( !primask )
+  {
+    __enable_irq();
+  }
   s_current_pos_mm         = 0.0f;
   s_commanded_pos_mm       = 0.0f;
   s_profiled_pos_mm        = 0.0f;
+  s_feedforward_pos_mm     = 0.0f;
+  s_current_vel_mm_s       = 0.0f;
+  s_direct_pos_active      = false;
   s_direct_pos_override_mm = 0.0f;
+  s_target_resistance_lbs  = 0.0f;
+  s_target_torque_lbf_in   = 0.0f;
   s_integral               = 0.0f;
+  s_curl_reversing         = false;
+  s_curl_stopped_ms        = 0;
+  s_apex_unload_ms         = 0;
+  s_motor_enabled          = false;
+
+  motor_apply_dynamic_current(false); /* Hold cleanly at 0.0 mm in cool 500 mA standby */
 } /* Motor_ZeroPosition() */
+
+void Motor_ResetCurlBaseline(void)
+{
+  s_min_curl_angle_deg = 0.0f;
+  s_curl_reversing     = false;
+  s_curl_stopped_ms    = 0;
+  s_apex_unload_ms     = 0;
+}
 
 /* Read the currently commanded resistance target in pounds
 ** Parameters:
@@ -375,7 +410,7 @@ float Motor_GetCommandedPositionMm(void)
 */
 float Motor_GetCurrentPositionMm(void)
 {
-  return s_current_pos_mm;
+  return (float)s_current_step / s_steps_per_mm;
 } /* Motor_GetCurrentPositionMm() */
 
 /* Read current instantaneous profiled carriage velocity in mm/s
@@ -401,7 +436,7 @@ float Motor_GetCurrentVelocityMmS(void)
 */
 float Motor_GetIqCurrent(void)
 {
-  return s_current_pos_mm;
+  return (float)s_current_step / s_steps_per_mm;
 } /* Motor_GetIqCurrent() */
 
 /* Instant safety disable of torque actuator output
@@ -414,19 +449,30 @@ float Motor_GetIqCurrent(void)
 */
 void Motor_EmergencyStop(void)
 {
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  int32_t frozen_step      = s_current_step;
+  s_target_step            = frozen_step; /* Freeze pulse generator immediately */
+  if ( !primask )
+  {
+    __enable_irq();
+  }
+
+  float frozen_mm          = (float)frozen_step / s_steps_per_mm;
+  s_current_pos_mm         = frozen_mm;
   s_target_resistance_lbs  = 0.0f;
   s_target_torque_lbf_in   = 0.0f;
   s_feedforward_pos_mm     = 0.0f;
   s_direct_pos_active      = false;
   s_direct_pos_override_mm = 0.0f;
   s_integral               = 0.0f;
-  s_commanded_pos_mm       = s_current_pos_mm;
-  s_profiled_pos_mm        = s_current_pos_mm;
+  s_commanded_pos_mm       = frozen_mm;
+  s_profiled_pos_mm        = frozen_mm;
   s_current_vel_mm_s       = 0.0f;
-  s_target_step            = s_current_step; /* Freeze pulse generator immediately */
   s_motor_enabled          = false;
   s_curl_reversing         = false;
   s_curl_stopped_ms        = 0;
+  s_apex_unload_ms         = 0;
 
   HAL_GPIO_WritePin(MOTOR_EN_PORT,   MOTOR_EN_PIN,   MOTOR_EN_INACTIVE_LEVEL);
   HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
@@ -496,8 +542,12 @@ void Motor_SetMicrostepping(float ustep_div)
 ** Notes:
 **   Executes at 100 Hz rate
 */
-void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float dt_s)
+void Motor_UpdateControl(float measured_force_lbs, float angle_deg, float velocity_deg_s, float dt_s)
 {
+  /* Sample live ISR step position cleanly */
+  int32_t curr_step = s_current_step;
+  s_current_pos_mm  = (float)curr_step / s_steps_per_mm;
+
   /* Sanity-check time step */
   if ( (dt_s <= 0.0f) || (dt_s > 0.1f) )
   {
@@ -522,31 +572,80 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     s_integral           = 0.0f;
     s_curl_reversing     = false;
     s_curl_stopped_ms    = 0;
+    s_apex_unload_ms     = 0;
   }
   else
   {
-    /* Detect curl reversal (eccentric lowering phase: negative angular velocity) and release brake.
-    ** Lower -4.0 deg/s trigger catches slow controlled lowering; 250ms standstill settles re-engage. */
+    if ( angle_deg < s_min_curl_angle_deg )
+    {
+      s_min_curl_angle_deg = angle_deg;
+    }
+    float excursion_deg = angle_deg - s_min_curl_angle_deg;
+
+    /* Eccentric Brake Release State Machine:
+    ** 1) Immediate release on negative velocity (< -4.0 deg/s).
+    ** 2) Apex Unload Dwell: once curled > 25 deg, if user stops pulling (v < 3 deg/s & force <= max(1.5, 25% target))
+    **    for 120 ms, release smoothly so clamped brake friction doesn't lock the arm at peak flexion.
+    ** 3) Re-engage only when active upward curl resumes (> 6 deg/s) or after settling near bottom (<= 20 deg, 250 ms). */
     if ( velocity_deg_s < -4.0f )
     {
       s_curl_reversing  = true;
       s_curl_stopped_ms = 0;
+      s_apex_unload_ms  = 0;
     }
-    else if ( s_curl_reversing )
+    else if ( !s_curl_reversing )
     {
+      float unload_force_thresh = 0.25f * s_target_resistance_lbs;
+      if ( unload_force_thresh < 1.5f )
+      {
+        unload_force_thresh = 1.5f;
+      }
+
+      if ( (excursion_deg >= 25.0f) &&
+           (velocity_deg_s < 3.0f) &&
+           (s_filt_force_lbs <= unload_force_thresh) )
+      {
+        uint32_t ts = HAL_GetTick();
+        if ( ts == 0U )
+        {
+          ts = 1U;
+        }
+        if ( s_apex_unload_ms == 0U )
+        {
+          s_apex_unload_ms = ts;
+        }
+        else if ( (HAL_GetTick() - s_apex_unload_ms) >= 120U )
+        {
+          s_curl_reversing  = true;
+          s_apex_unload_ms  = 0;
+          s_curl_stopped_ms = 0;
+        }
+      }
+      else
+      {
+        s_apex_unload_ms = 0;
+      }
+    }
+    else
+    {
+      s_apex_unload_ms = 0;
       if ( velocity_deg_s > 6.0f )
       {
         s_curl_reversing  = false;
         s_curl_stopped_ms = 0;
       }
-      else if ( fabsf(velocity_deg_s) < 2.5f )
+      else if ( (excursion_deg <= 20.0f) && (fabsf(velocity_deg_s) < 2.5f) )
       {
-        uint32_t now_ms = HAL_GetTick();
-        if ( s_curl_stopped_ms == 0 )
+        uint32_t ts = HAL_GetTick();
+        if ( ts == 0U )
         {
-          s_curl_stopped_ms = now_ms;
+          ts = 1U;
         }
-        else if ( (now_ms - s_curl_stopped_ms) >= 250 )
+        if ( s_curl_stopped_ms == 0U )
+        {
+          s_curl_stopped_ms = ts;
+        }
+        else if ( (HAL_GetTick() - s_curl_stopped_ms) >= 250U )
         {
           s_curl_reversing  = false;
           s_curl_stopped_ms = 0;
@@ -632,25 +731,25 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
 
   /* 6B. Auto-Scale IRUN only when stationary so UART never introduces step jitter mid-ramp:
   ** drop to 500 mA standby at 0.0 mm home, restore full configured run current before moving off 0.0 mm. */
-  if ( s_current_step == s_target_step )
+  if ( curr_step == s_target_step )
   {
-    bool need_active = (s_current_step != 0) ||
+    bool need_active = (curr_step != 0) ||
                        (fabsf(s_commanded_pos_mm) >= 0.05f) ||
                        (s_direct_pos_active && (fabsf(s_direct_pos_override_mm) >= 0.05f)) ||
                        (s_motor_enabled && !s_curl_reversing && (s_target_torque_lbf_in > 0.0f));
     motor_apply_dynamic_current(need_active);
   }
 
-  /* 7. Asymmetric Trapezoidal Profiler (Smooth engaging, crisp retraction on descent release) */
-  /* Prevent profiler from drifting > 0.5 mm ahead of actual stepper position */
+  /* 7. Asymmetric Trapezoidal Profiler (Smooth engaging, controlled retraction on descent release) */
+  /* Anti-desync ceiling if physical limit switch froze stepping (> 2.0 mm lag) */
   float lag_mm = s_profiled_pos_mm - s_current_pos_mm;
-  if ( lag_mm > 0.5f )
+  if ( lag_mm > 2.0f )
   {
-    s_profiled_pos_mm = s_current_pos_mm + 0.5f;
+    s_profiled_pos_mm = s_current_pos_mm + 2.0f;
   }
-  else if ( lag_mm < -0.5f )
+  else if ( lag_mm < -2.0f )
   {
-    s_profiled_pos_mm = s_current_pos_mm - 0.5f;
+    s_profiled_pos_mm = s_current_pos_mm - 2.0f;
   }
 
   float pos_err = s_commanded_pos_mm - s_profiled_pos_mm;
@@ -705,33 +804,43 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
     s_current_vel_mm_s = 0.0f;
   }
 
-  /* 8. Convert Profiled Linear Position to Target Motor Steps */
-  s_target_step = (int32_t)lroundf(s_profiled_pos_mm * s_steps_per_mm);
+  /* 8. Convert Profiled Linear Position & Instantaneous Velocity to Target Step + Exact Microsecond Interval */
+  int32_t target_step_next = (int32_t)lroundf(s_profiled_pos_mm * s_steps_per_mm);
 
-  /* Dynamically calculate step interval in DWT cycles based on instantaneous velocity */
   float abs_vel = fabsf(s_current_vel_mm_s);
-  if ( (abs_vel < MIN_SLEW_VELOCITY_MM_S) && (s_current_step != s_target_step) )
+  if ( (abs_vel < MIN_SLEW_VELOCITY_MM_S) && (curr_step != target_step_next) )
   {
-    abs_vel = MIN_SLEW_VELOCITY_MM_S; /* Smooth settling crawl */
+    abs_vel = MIN_SLEW_VELOCITY_MM_S; /* Smooth settling crawl (200 Hz = 5000 us) */
   }
   else if ( abs_vel < 0.1f )
   {
-    abs_vel = MIN_SLEW_VELOCITY_MM_S; /* Never jump to 100 us max speed from standstill */
+    abs_vel = MIN_SLEW_VELOCITY_MM_S;
   }
 
   float step_rate_hz = abs_vel * s_steps_per_mm;
-  uint32_t cycles = (uint32_t)((float)SystemCoreClock / step_rate_hz);
-  uint32_t min_cycles = (SystemCoreClock / 1000000) * MOTOR_MIN_STEP_INTERVAL_US;
-  if ( cycles < min_cycles )
+  uint32_t interval_us = (uint32_t)lroundf(1000000.0f / step_rate_hz);
+  if ( interval_us < MOTOR_MIN_STEP_INTERVAL_US )
   {
-    cycles = min_cycles;
+    interval_us = MOTOR_MIN_STEP_INTERVAL_US;
   }
-  s_step_interval_cycles = cycles;
+  else if ( interval_us > 10000U )
+  {
+    interval_us = 10000U;
+  }
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  s_step_interval_us = interval_us;
+  s_target_step      = target_step_next;
+  if ( !primask )
+  {
+    __enable_irq();
+  }
 
   /* 9. Periodic TMC2209 Health Diagnostics (ONLY when stationary so UART never stalls active ramps) */
   static uint8_t s_tmc_check_cnt = 0;
   s_tmc_check_cnt++;
-  if ( s_tmc_online && (s_tmc_check_cnt >= 20) && (s_current_step == s_target_step) )
+  if ( s_tmc_online && (s_tmc_check_cnt >= 20) && (curr_step == target_step_next) )
   {
     s_tmc_check_cnt = 0;
     if ( TMC2209_ReadStatus(&s_tmc_status) )
@@ -739,73 +848,101 @@ void Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float d
       if ( s_tmc_status.driver_fault )
       {
         Motor_EmergencyStop();
+        char fault_msg[112];
+        snprintf(fault_msg, sizeof(fault_msg),
+                 "ALERT:TMC_FAULT:ESTOP,OT=%d,OTPW=%d,S2GA=%d,S2GB=%d,S2VSA=%d,S2VSB=%d\r\n",
+                 s_tmc_status.over_temperature_shutdown ? 1 : 0,
+                 s_tmc_status.over_temperature_warning ? 1 : 0,
+                 s_tmc_status.short_to_ground_a ? 1 : 0,
+                 s_tmc_status.short_to_ground_b ? 1 : 0,
+                 s_tmc_status.short_to_supply_a ? 1 : 0,
+                 s_tmc_status.short_to_supply_b ? 1 : 0);
+        Telemetry_SendAck(fault_msg);
       }
     }
   }
 } /* Motor_UpdateControl() */
 
-/* Non-blocking stepper pulse engine
+/* Hardware timer ISR pulse generator (called at Priority 1 from TIM3_IRQHandler)
 ** Parameters:
 **   None
 ** Return:
 **   None
 ** Notes:
-**   Maintains microsecond step period paced to current velocity using Cortex-M4 DWT cycles
+**   Eliminates main-loop I2C/USB blocking jitter; 1 us step cadence accuracy.
 */
-void Motor_StepTask(void)
+void Motor_StepISR(void)
 {
-  /* Hard hardware limit switch guard: halt stepping instantaneously if PB13 is active */
-  if ( Motor_IsLimitSwitchTriggered() )
+  if ( (TIM3->SR & TIM_SR_UIF) == 0U )
   {
     return;
   }
+  TIM3->SR = (uint32_t)(~TIM_SR_UIF);
 
-  if ( s_current_step == s_target_step )
+  if ( s_is_homing || Motor_IsLimitSwitchTriggered() )
   {
-    /* If disabled and carriage has returned completely home to 0, disable driver to keep cool */
-    if ( (!s_motor_enabled) && (!s_direct_pos_active) && (s_current_step == 0) )
-    {
-      HAL_GPIO_WritePin(MOTOR_EN_PORT, MOTOR_EN_PIN, MOTOR_EN_INACTIVE_LEVEL);
-    }
+    TIM3->ARR = 999U;
     return;
   }
 
-  /* Check if dynamically paced step interval has elapsed */
-  uint32_t cycles_now     = DWT->CYCCNT;
-  uint32_t cycles_elapsed = cycles_now - s_last_step_cycle;
-
-  if ( cycles_elapsed < s_step_interval_cycles )
+  int32_t curr   = s_current_step;
+  int32_t target = s_target_step;
+  if ( curr == target )
   {
+    TIM3->ARR = 999U;
     return;
   }
 
-  /* Determine step direction */
-  int32_t step_delta = 0;
-  if ( s_target_step > s_current_step )
+  uint32_t interval_us = s_step_interval_us;
+  if ( interval_us < MOTOR_MIN_STEP_INTERVAL_US )
   {
-    /* Positive step: advance carriage towards brake (tightens brake) */
-    HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    interval_us = MOTOR_MIN_STEP_INTERVAL_US;
+  }
+  else if ( interval_us > 10000U )
+  {
+    interval_us = 10000U;
+  }
+
+  /* Atomic BSRR direction setup (>= 20 ns setup before STEP edge) */
+  int32_t step_delta;
+  if ( target > curr )
+  {
+    MOTOR_DIR_PORT->BSRR = s_dir_inverted ? MOTOR_DIR_PIN : ((uint32_t)MOTOR_DIR_PIN << 16);
     step_delta = 1;
   }
   else
   {
-    /* Negative step: retract carriage away from brake (loosens brake) */
-    HAL_GPIO_WritePin(MOTOR_DIR_PORT, MOTOR_DIR_PIN, s_dir_inverted ? GPIO_PIN_RESET : GPIO_PIN_SET);
+    MOTOR_DIR_PORT->BSRR = s_dir_inverted ? ((uint32_t)MOTOR_DIR_PIN << 16) : MOTOR_DIR_PIN;
     step_delta = -1;
   }
 
-  /* Generate positive step pulse (minimum 2 us HIGH) */
-  HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_SET);
-  for ( volatile int i = 0; i < 50; i++ )
+  for ( volatile int d = 0; d < 8; d++ )
   {
     __NOP();
   }
-  HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
 
-  /* Advance tracking position */
-  s_current_step    += step_delta;
-  s_current_pos_mm   = (float)s_current_step / s_steps_per_mm;
-  s_last_step_cycle  = cycles_now;
+  /* Crisp ~1.5 us HIGH STEP pulse via atomic BSRR */
+  MOTOR_STEP_PORT->BSRR = MOTOR_STEP_PIN;
+  for ( volatile int i = 0; i < 45; i++ )
+  {
+    __NOP();
+  }
+  MOTOR_STEP_PORT->BSRR = ((uint32_t)MOTOR_STEP_PIN << 16);
+
+  curr += step_delta;
+  s_current_step = curr;
+  TIM3->ARR = (curr == target) ? 999U : (interval_us - 1U);
+} /* Motor_StepISR() */
+
+/* Main-loop position mirror housekeeping (stepping itself runs in TIM3 ISR)
+** Parameters:
+**   None
+** Return:
+**   None
+*/
+void Motor_StepTask(void)
+{
+  s_current_pos_mm = (float)s_current_step / s_steps_per_mm;
 } /* Motor_StepTask() */
 
 /* Query if TMC2209 responded over single-wire UART
@@ -931,7 +1068,7 @@ bool Motor_SetDriverCoolStep(uint8_t semin, uint8_t semax)
 
 static uint8_t  s_homing_sgthrs        = 100;
 static uint32_t s_homing_speed_us      = 350;   /* 350 us step period (~7.1 mm/s / ~54 RPM) */
-static uint16_t s_homing_current_mA    = 800;   /* 800 mA gentle homing current */
+static uint16_t s_homing_current_mA    = 1200;  /* 1.20 A true RMS homing current (vsense=1) */
 static float    s_homing_slack_mm      = 30.0f; /* 30.0 mm backoff clearance from limit switch */
 static char     s_homing_diagnostic[128] = "INIT";
 
@@ -1141,16 +1278,20 @@ bool Motor_IsLimitSwitchTriggered(void)
 */
 bool Motor_ServiceLimitEstop(void)
 {
+  uint32_t now_ms = HAL_GetTick();
   if ( Motor_IsLimitSwitchTriggered() )
   {
-    s_limit_release_cnt = 0;
+    s_limit_release_ms = 0;
     if ( !s_limit_was_triggered )
     {
-      s_limit_debounce++;
-      if ( s_limit_debounce >= 3U )
+      if ( s_limit_press_ms == 0U )
+      {
+        s_limit_press_ms = (now_ms == 0U) ? 1U : now_ms;
+      }
+      else if ( (now_ms - s_limit_press_ms) >= 15U )
       {
         s_limit_was_triggered = true;
-        s_limit_debounce      = 0;
+        s_limit_press_ms      = 0;
         Motor_EmergencyStop();
         return true;
       }
@@ -1158,14 +1299,17 @@ bool Motor_ServiceLimitEstop(void)
   }
   else
   {
-    s_limit_debounce = 0;
+    s_limit_press_ms = 0;
     if ( s_limit_was_triggered )
     {
-      s_limit_release_cnt++;
-      if ( s_limit_release_cnt >= 5U )
+      if ( s_limit_release_ms == 0U )
+      {
+        s_limit_release_ms = (now_ms == 0U) ? 1U : now_ms;
+      }
+      else if ( (now_ms - s_limit_release_ms) >= 30U )
       {
         s_limit_was_triggered = false;
-        s_limit_release_cnt   = 0;
+        s_limit_release_ms    = 0;
       }
     }
   }
@@ -1192,14 +1336,15 @@ bool Motor_Home(void)
     s_tmc_online = TMC2209_Init();
   }
 
-  /* Configure homing current and smooth StealthChop mode */
+  /* Configure homing current and smooth StealthChop mode without CoolStep torque sag */
   if ( s_tmc_online )
   {
     /* TMC2209 operates in StealthChop2 mode for silent, smooth motion */
     TMC2209_EnableStealthChop(true);
+    TMC2209_ConfigureCoolStep(0, 0);
 
-    /* Dedicated soft homing current: s_homing_current_mA (protects mechanics) */
-    TMC2209_SetCurrent(s_homing_current_mA, 50);
+    /* Dedicated homing current with strong standstill hold */
+    TMC2209_SetCurrent(s_homing_current_mA, TMC2209_DEFAULT_HOLD_PERCENT);
   }
 
   /* 2. Step in reverse/retract direction to search for physical limit switch */
@@ -1208,6 +1353,8 @@ bool Motor_Home(void)
   int32_t limit_switch_debounce = 0;
   int32_t stop_step = 0;
   const char *stop_cause = "TIMEOUT";
+  const int32_t  homing_ramp_steps    = 600;   /* 1.5 mm gentle start ramp */
+  const uint32_t homing_start_delay_us = 2200U; /* ~1.14 mm/s start (prevents stall jump from 0 Hz) */
 
   /* Check if carriage is ALREADY at physical limit switch before moving */
   if ( HAL_GPIO_ReadPin(MOTOR_LIMIT_PORT, MOTOR_LIMIT_PIN) == GPIO_PIN_RESET )
@@ -1228,11 +1375,12 @@ bool Motor_Home(void)
     }
     HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
 
-    /* Smooth acceleration ramp at start of homing to prevent sudden torque shock */
+    /* Smooth acceleration ramp from 2200 us down to s_homing_speed_us over 600 steps (1.5 mm) */
     uint32_t step_delay = s_homing_speed_us;
-    if ( i < 200 )
+    if ( (i < homing_ramp_steps) && (homing_start_delay_us > s_homing_speed_us) )
     {
-      step_delay = 800 - (((800 - s_homing_speed_us) * i) / 200);
+      step_delay = homing_start_delay_us -
+                   (uint32_t)(((uint64_t)(homing_start_delay_us - s_homing_speed_us) * (uint32_t)i) / (uint32_t)homing_ramp_steps);
     }
     delay_us(step_delay);
 
@@ -1288,6 +1436,8 @@ bool Motor_Home(void)
 
   if ( backoff_steps > 0 )
   {
+    int32_t half_backoff = backoff_steps / 2;
+    int32_t ramp_len = (half_backoff < homing_ramp_steps) ? half_backoff : homing_ramp_steps;
     for ( int32_t i = 0; i < backoff_steps; i++ )
     {
       /* Immediate Emergency Stop check on every step during backoff */
@@ -1309,13 +1459,14 @@ bool Motor_Home(void)
       HAL_GPIO_WritePin(MOTOR_STEP_PORT, MOTOR_STEP_PIN, GPIO_PIN_RESET);
 
       uint32_t backoff_delay = s_homing_speed_us;
-      if ( (backoff_steps > 400) && (i < 200) )
+      if ( (ramp_len > 0) && (homing_start_delay_us > s_homing_speed_us) )
       {
-        backoff_delay = 800 - (((800 - s_homing_speed_us) * i) / 200);
-      }
-      else if ( (backoff_steps > 400) && (i > (backoff_steps - 200)) )
-      {
-        backoff_delay = s_homing_speed_us + (((800 - s_homing_speed_us) * (i - (backoff_steps - 200))) / 200);
+        int32_t steps_from_edge = (i < half_backoff) ? i : (backoff_steps - 1 - i);
+        if ( steps_from_edge < ramp_len )
+        {
+          backoff_delay = homing_start_delay_us -
+                          (uint32_t)(((uint64_t)(homing_start_delay_us - s_homing_speed_us) * (uint32_t)steps_from_edge) / (uint32_t)ramp_len);
+        }
       }
       delay_us(backoff_delay);
     }
@@ -1323,8 +1474,15 @@ bool Motor_Home(void)
 
   /* 4. Calibrate new physical 0.0 mm home at this standoff position & clear prior active targets
   ** so stale resistance/torque/position setpoints from Live Test cannot re-engage after homing. */
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
   s_current_step           = 0;
   s_target_step            = 0;
+  s_step_interval_us       = 2000U;
+  if ( !primask )
+  {
+    __enable_irq();
+  }
   s_current_pos_mm         = 0.0f;
   s_profiled_pos_mm        = 0.0f;
   s_commanded_pos_mm       = 0.0f;
@@ -1337,11 +1495,12 @@ bool Motor_Home(void)
   s_direct_pos_override_mm = 0.0f;
   s_curl_reversing         = false;
   s_curl_stopped_ms        = 0;
+  s_apex_unload_ms         = 0;
+  s_min_curl_angle_deg     = 0.0f;
   s_motor_enabled          = false;
-  s_limit_debounce         = 0;
-  s_limit_release_cnt      = 0;
+  s_limit_press_ms         = 0;
+  s_limit_release_ms       = 0;
   s_limit_was_triggered    = Motor_IsLimitSwitchTriggered();
-  s_step_interval_cycles   = (uint32_t)((float)SystemCoreClock / (MIN_SLEW_VELOCITY_MM_S * s_steps_per_mm));
 
   /* Record detailed diagnostic outcome */
   snprintf(s_homing_diagnostic, sizeof(s_homing_diagnostic),
@@ -1349,7 +1508,7 @@ bool Motor_Home(void)
            stop_cause, (long)(end_found ? stop_step : max_search_steps),
            s_homing_slack_mm);
 
-  /* Drop cleanly to 500 mA standby current at 0.0 mm home until active load moves off 0 */
+  /* Keep MOTOR_EN active at 500 mA standby (350 mA hold) so T8x8 leadscrew stays locked at 0.0 mm */
   s_is_homing = false;
   s_is_standby_current = false;
   motor_apply_dynamic_current(false);

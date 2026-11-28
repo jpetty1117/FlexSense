@@ -23,8 +23,8 @@ except ImportError:
 CALIBRATION_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "calibration"))
 DEV_CONFIG_PATH = os.path.join(CALIBRATION_DIR, "dev_config.json")
 DEFAULT_DEV_CONFIG = {
-    "run_curr_ma": 1500,
-    "homing_curr_ma": 800,
+    "run_curr_ma": 1400,
+    "homing_curr_ma": 1200,
     "homing_speed_us": 350,
     "homing_slack_mm": 30.0,
     "dir_inverted": True,
@@ -335,6 +335,7 @@ class STM32EncoderInterface:
                         self.send_command("START")
                         self.is_streaming = True
                         self.rx_buffer.clear()
+                        self.rx_text_lines.append("ALERT:USB_RECONNECT:STM32_RESET_OR_DROPPED")
             if not self.is_connected or not self.ser:
                 return []
 

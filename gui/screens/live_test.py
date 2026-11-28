@@ -426,6 +426,7 @@ class LiveTestScreen(QWidget):
         self.rep_state = "EXTENDED"
         self.rep_rom_buf = []
         self.rep_force_buf = []
+        self.rep_speed_buf = []
         self.rep_peak_forces = []
         self.session_baseline_rom = 0.0
         self.fatigue_index_pct = 100.0
@@ -1554,6 +1555,7 @@ class LiveTestScreen(QWidget):
         self.rep_state = "EXTENDED"
         self.rep_rom_buf = []
         self.rep_force_buf = []
+        self.rep_speed_buf = []
         self.rep_peak_forces = []
         self.fatigue_index_pct = 100.0
         self.smoothness_vel_buf.clear()
@@ -1690,6 +1692,7 @@ class LiveTestScreen(QWidget):
         self.rep_state = "EXTENDED"
         self.rep_rom_buf = []
         self.rep_force_buf = []
+        self.rep_speed_buf = []
         self.rep_peak_forces = []
         self.fatigue_index_pct = 100.0
         self.smoothness_vel_buf.clear()
@@ -1812,12 +1815,15 @@ class LiveTestScreen(QWidget):
         forearm_inches = self.get_forearm_inches()
         observed_max_rom = self.max_session_rom if self.max_session_rom > 0 else (max(self.full_rom_data) if self.full_rom_data else 0.0)
         observed_max_force = self.max_session_force if self.max_session_force > 0 else (max(self.full_force_data) if self.full_force_data else 0.0)
+        conc_forces = [f for f, sp in zip(self.full_force_data, self.full_speed_data) if sp > 10.0]
+        mean_conc_force = float(np.mean(conc_forces)) if conc_forces else 0.0
         peak_torque_in_lb = observed_max_force * forearm_inches
 
         deficit_str = f"Stall at {self.last_deficit_angle:.1f}° ({self.last_deficit_force:.1f} lbs)" if self.last_deficit_angle else "Full Strength"
         notes = (
             f"Reps: {self.reps_count}/{self.target_reps} | Peak ROM: {observed_max_rom:.1f}° | "
             f"Peak Force: {observed_max_force:.1f} lbs ({peak_torque_in_lb:.1f} in-lb) | "
+            f"Mean Force: {mean_conc_force:.1f} lbs | "
             f"Fatigue Index: {self.fatigue_index_pct:.0f}% | Smoothness: {self.smoothness_score:.0f}% | "
             f"Forearm: Pin {forearm_pin} ({forearm_inches:.0f}\") | Deficit: {deficit_str} | Work: {self.therapy_work_j:.0f} J"
         )
@@ -1917,9 +1923,11 @@ class LiveTestScreen(QWidget):
                 self.current_rep_peak = rom
                 self.rep_rom_buf = [rom]
                 self.rep_force_buf = [force]
+                self.rep_speed_buf = [speed]
         elif self.rep_state == "FLEXING":
             self.rep_rom_buf.append(rom)
             self.rep_force_buf.append(force)
+            self.rep_speed_buf.append(speed)
             if rom > self.current_rep_peak:
                 self.current_rep_peak = rom
             # Detect apex: excursion >= 30 deg and arm starts returning
@@ -2009,11 +2017,12 @@ class LiveTestScreen(QWidget):
                             self.fatigue_drop_angle = None
                             self.fatigue_drop_delta = 0.0
 
-                # Analyze concentric buffer for force deficit valley
+                # Analyze active concentric samples (speed >= 10 deg/s) for true mid-rep force deficit valley
                 if self.rep_rom_buf:
                     r_arr = np.asarray(self.rep_rom_buf)
                     f_arr = np.asarray(self.rep_force_buf)
-                    mask = (r_arr >= 40.0) & (r_arr <= 110.0)
+                    s_arr = np.asarray(self.rep_speed_buf) if len(self.rep_speed_buf) == len(r_arr) else np.full_like(r_arr, 15.0)
+                    mask = (r_arr >= 40.0) & (r_arr <= 110.0) & (s_arr >= 10.0)
                     if np.any(mask):
                         mid_f = f_arr[mask]
                         mid_r = r_arr[mask]
@@ -2028,6 +2037,7 @@ class LiveTestScreen(QWidget):
                             self.last_deficit_force = None
                 self.rep_rom_buf = []
                 self.rep_force_buf = []
+                self.rep_speed_buf = []
 
     def _update_data(self):
         target_r = self.spin_resistance.value()
@@ -2047,6 +2057,20 @@ class LiveTestScreen(QWidget):
                             f"background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['danger']};"
                         )
                         return
+                    elif "ALERT:TMC_FAULT" in line:
+                        self._stop_test()
+                        self.lbl_status.setText("🛑 TMC2209 DRIVER FAULT -> MOTOR STOPPED")
+                        self.lbl_status.setStyleSheet(
+                            f"color: {COLORS['danger']}; font-size: 13px; font-weight: bold; padding: 4px 10px; "
+                            f"background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['danger']};"
+                        )
+                        return
+                    elif "ALERT:USB_RECONNECT" in line:
+                        self.lbl_status.setText("⚠️ USB RECONNECTED -> ZERO SENSORS BEFORE CONTINUING")
+                        self.lbl_status.setStyleSheet(
+                            f"color: {COLORS['warning']}; font-size: 13px; font-weight: bold; padding: 4px 10px; "
+                            f"background-color: {COLORS['bg_surface']}; border-radius: 6px; border: 1px solid {COLORS['warning']};"
+                        )
                 if samples:
                     for sample in samples:
                         t_ms = sample[0]

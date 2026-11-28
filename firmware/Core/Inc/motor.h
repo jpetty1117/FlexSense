@@ -39,8 +39,8 @@ extern "C" {
 #define INTEGRAL_MAX_TRIM_MM        2.0f      /* mm maximum feedback trim (+/- 4 lbf @ 2.0 lbf/mm plant) */
 #define MAX_SLEW_VELOCITY_MM_S      15.0f     /* mm/s smooth normal linear slew speed (engaging) */
 #define MAX_ACCELERATION_MM_S2      45.0f     /* mm/s^2 smooth trapezoidal acceleration ramp (~0.33 s to full speed) */
-#define MAX_RELEASE_VELOCITY_MM_S   25.0f     /* mm/s crisp retraction speed when letting go on descent */
-#define MAX_RELEASE_ACCEL_MM_S2     120.0f    /* mm/s^2 fast release acceleration so brake clears during lowering */
+#define MAX_RELEASE_VELOCITY_MM_S   16.0f     /* mm/s controlled crisp retraction without losing StealthChop sync */
+#define MAX_RELEASE_ACCEL_MM_S2     60.0f     /* mm/s^2 smooth release acceleration so brake clears during lowering */
 #define MIN_SLEW_VELOCITY_MM_S      0.5f      /* mm/s minimum crawling speed */
 
 /* Stepper Motor & Lead Screw Mechanical Geometry */
@@ -48,7 +48,7 @@ extern "C" {
 #define MOTOR_LEAD_SCREW_PITCH_MM   8.0f      /* mm travel per motor revolution */
 #define MOTOR_DEFAULT_MICROSTEP     16.0f     /* 1/16 microstepping driver */
 #define MOTOR_STEPS_PER_MM          ((MOTOR_FULL_STEPS_PER_REV * MOTOR_DEFAULT_MICROSTEP) / MOTOR_LEAD_SCREW_PITCH_MM)
-#define MOTOR_MIN_STEP_INTERVAL_US  100       /* microseconds */
+#define MOTOR_MIN_STEP_INTERVAL_US  125       /* microseconds (8 kHz cap = 20 mm/s max) */
 
 /* Hardware Pin Allocations (Adafruit TMC2209 Breakout) */
 #define MOTOR_DIR_PIN               GPIO_PIN_4
@@ -72,15 +72,16 @@ extern "C" {
 #define MOTOR_EN_ACTIVE_LEVEL       GPIO_PIN_RESET
 #define MOTOR_EN_INACTIVE_LEVEL     GPIO_PIN_SET
 
-/* TMC2209 UART Current Limits */
-#define TMC2209_DEFAULT_RUN_CURRENT_MA 1500   /* 1.5 A RMS active run current limit */
-#define TMC2209_STANDBY_RUN_CURRENT_MA 500    /* 0.5 A RMS standby current when parked at 0.0 mm */
-#define TMC2209_DEFAULT_HOLD_PERCENT   40     /* 40% hold current at standstill */
+/* TMC2209 UART Current Limits (Calibrated to Adafruit Rsense=0.05 ohm, vsense=1: 1818 mA FS) */
+#define TMC2209_DEFAULT_RUN_CURRENT_MA 1400   /* 1.40 A true RMS active run current */
+#define TMC2209_STANDBY_RUN_CURRENT_MA 500    /* 0.50 A true RMS standby at 0.0 mm */
+#define TMC2209_DEFAULT_HOLD_PERCENT   55     /* 55% hold (~770 mA active hold, ~275 mA at 0.0 mm standby) */
 
 #include "tmc2209.h"
 
 /* Public Function Prototypes */
 void     Motor_Init(void);
+void     Motor_StepISR(void);
 void     Motor_SetResistanceLbs(float resistance_lbs);
 void     Motor_SetTorqueLbfIn(float torque_lbf_in);
 void     Motor_SetForearmLengthIn(float arm_in);
@@ -95,7 +96,8 @@ float    Motor_GetCurrentVelocityMmS(void);
 float    Motor_GetIqCurrent(void);
 void     Motor_EmergencyStop(void);
 bool     Motor_IsEnabled(void);
-void     Motor_UpdateControl(float measured_force_lbs, float velocity_deg_s, float dt_s);
+void     Motor_ResetCurlBaseline(void);
+void     Motor_UpdateControl(float measured_force_lbs, float angle_deg, float velocity_deg_s, float dt_s);
 void     Motor_StepTask(void);
 void     Motor_SetInvertedDirection(bool inverted);
 bool     Motor_IsInvertedDirection(void);

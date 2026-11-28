@@ -1,0 +1,7 @@
+{
+  "run_curr_ma": 1400,
+  "homing_curr_ma": 1200,
+  "homing_speed_us": 350,
+  "homing_slack_mm": 30.0,
+  "dir_inverted": true
+}

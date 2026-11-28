@@ -147,6 +147,7 @@ int main(void)
       case CMD_START:
         s_sys_state = SYS_STATE_STREAMING;
         Encoder_Zero();
+        Motor_ResetCurlBaseline();
         LoadCell_Tare();
         s_stream_start_tick = HAL_GetTick();
         Telemetry_SendAck("ACK:START\r\n");
@@ -201,6 +202,7 @@ int main(void)
 
       case CMD_ZERO:
         Encoder_Zero();
+        Motor_ResetCurlBaseline();
         LoadCell_Tare();
         Telemetry_SendAck("ACK:ZERO\r\n");
         break;
@@ -422,7 +424,7 @@ int main(void)
       float current_force = LoadCell_ReadForceLbs();
 
       /* Update Series Elastic Actuator dynamic brake controller (100 Hz, dt = 0.010 s) */
-      Motor_UpdateControl(current_force, Encoder_GetVelocityDegS(), 0.010f);
+      Motor_UpdateControl(current_force, Encoder_GetAngleDeg(), Encoder_GetVelocityDegS(), 0.010f);
 
       /* Update MAX30102 pulse oximeter acquisition at 20 Hz (every 50 ms) to avoid blocking 100 Hz loop */
       static uint32_t s_spo2_tick = 0;

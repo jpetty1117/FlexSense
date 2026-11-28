@@ -25,6 +25,32 @@
 /* USER CODE END 0 */
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+
+/* TIM3 init function: 1 MHz (1 us/tick) hardware stepper pulse timer */
+void MX_TIM3_Init(void)
+{
+  __HAL_RCC_TIM3_CLK_ENABLE();
+
+  uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
+  uint32_t ppre1 = (RCC->CFGR & RCC_CFGR_PPRE1) >> RCC_CFGR_PPRE1_Pos;
+  uint32_t tim3_clk = (ppre1 >= 4U) ? (pclk1 * 2U) : pclk1;
+  uint32_t prescaler = (tim3_clk >= 1000000U) ? ((tim3_clk / 1000000U) - 1U) : 0U;
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = prescaler;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999U; /* 1 ms idle wake interval until motion starts */
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  HAL_NVIC_SetPriority(TIM3_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(TIM3_IRQn);
+}
 
 /* TIM2 init function */
 void MX_TIM2_Init(void)

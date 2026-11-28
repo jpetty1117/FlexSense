@@ -710,7 +710,7 @@ class DevToolsScreen(QWidget):
         self.spin_run_curr = QDoubleSpinBox()
         self.spin_run_curr.setFixedWidth(80)
         self.spin_run_curr.setRange(400, 1770)
-        self.spin_run_curr.setValue(1500)
+        self.spin_run_curr.setValue(1400)
         self.spin_run_curr.setSingleStep(50)
         self.spin_run_curr.setDecimals(0)
         self.spin_run_curr.setSuffix(" mA")
@@ -741,7 +741,7 @@ class DevToolsScreen(QWidget):
         self.spin_homing_curr = QDoubleSpinBox()
         self.spin_homing_curr.setFixedWidth(80)
         self.spin_homing_curr.setRange(300, 1800)
-        self.spin_homing_curr.setValue(800)
+        self.spin_homing_curr.setValue(1200)
         self.spin_homing_curr.setSingleStep(50)
         self.spin_homing_curr.setDecimals(0)
         self.spin_homing_curr.setSuffix(" mA")
@@ -1159,8 +1159,16 @@ class DevToolsScreen(QWidget):
     def _zero_motor_pos(self):
         """Zero the physical stepper carriage tracking reference in firmware and GUI without homing."""
         self._send_raw_command("ZEROPOS")
+        self.live_carriage_mm = 0.0
+        self.commanded_pos_mm = 0.0
+        if getattr(self, "hw", None):
+            self.hw.last_motor_iq = 0.0
+        self.spin_stepper_pos.blockSignals(True)
+        self.slider_stepper_pos.blockSignals(True)
         self.spin_stepper_pos.setValue(0.0)
         self.slider_stepper_pos.setValue(0)
+        self.spin_stepper_pos.blockSignals(False)
+        self.slider_stepper_pos.blockSignals(False)
         self.lbl_curr_pos.setText("0.0 mm")
         self.lbl_hud_pos_val.setText("0.0 mm")
         self.line_curr_pos.setValue(0.0)
@@ -1746,6 +1754,14 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             self.lbl_homing_status.setText("🛑 Limit Switch PB13 Hit -> Cancelled & Returning Home to 0.0 mm")
             self.lbl_homing_status.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; font-size: 11px;")
             self._log_terminal(f"🛑 [HARDWARE LIMIT E-STOP] {line.strip()} - Everything cancelled, returning to 30 mm slack home.")
+        elif "ALERT:TMC_FAULT" in line:
+            self.lbl_homing_status.setText("🛑 TMC2209 Driver Fault -> Motor Disabled")
+            self.lbl_homing_status.setStyleSheet(f"color: {COLORS['danger']}; font-weight: bold; font-size: 11px;")
+            self._log_terminal(f"🛑 [TMC2209 FAULT] {line.strip()} - Check driver temp / wiring / motor bus.")
+        elif "ALERT:USB_RECONNECT" in line:
+            self.lbl_homing_status.setText("⚠️ USB Reconnected (MCU Reset/Drop)")
+            self.lbl_homing_status.setStyleSheet(f"color: {COLORS['warning']}; font-weight: bold; font-size: 11px;")
+            self._log_terminal("⚠️ [USB AUTO-RECONNECT] STM32 reset or USB dropped; startup homing resets carriage to 0.0 mm.")
         elif "ACK:DIR:" in line:
             is_inv = "1" in line
             self._dev_cfg = save_dev_config({"dir_inverted": is_inv})
@@ -1793,8 +1809,19 @@ static inline float Brake_LUT_ForceToPositionMm(float target_force_lbs)
             self._log_terminal(f"[MCU] Position acknowledged: {line[8:]} mm")
         elif "ACK:ZEROPOS" in line:
             self._log_terminal("[MCU] Carriage Motor Position zeroed to 0.0 mm")
+            self.live_carriage_mm = 0.0
+            self.commanded_pos_mm = 0.0
+            if getattr(self, "hw", None):
+                self.hw.last_motor_iq = 0.0
+            self.spin_stepper_pos.blockSignals(True)
+            self.slider_stepper_pos.blockSignals(True)
+            self.spin_stepper_pos.setValue(0.0)
+            self.slider_stepper_pos.setValue(0)
+            self.spin_stepper_pos.blockSignals(False)
+            self.slider_stepper_pos.blockSignals(False)
             self.lbl_curr_pos.setText("0.0 mm")
             self.lbl_hud_pos_val.setText("0.0 mm")
+            self.line_curr_pos.setValue(0.0)
         elif "ACK:RES:" in line:
             self._log_terminal(f"[MCU] Target Load Acknowledged: {line[8:].strip()} lbs")
         elif "ACK:TORQUE:" in line:

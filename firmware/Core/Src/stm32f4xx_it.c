@@ -199,6 +199,7 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
+extern void Motor_StepISR(void);
 
 /**
   * @brief This function handles USB On The Go FS global interrupt.
@@ -212,6 +213,14 @@ void OTG_FS_IRQHandler(void)
   /* USER CODE BEGIN OTG_FS_IRQn 1 */
 
   /* USER CODE END OTG_FS_IRQn 1 */
+}
+
+/**
+  * @brief This function handles TIM3 global interrupt for jitter-free stepper stepping.
+  */
+void TIM3_IRQHandler(void)
+{
+  Motor_StepISR();
 }
 
 /* USER CODE BEGIN 1 */

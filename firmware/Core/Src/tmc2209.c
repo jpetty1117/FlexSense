@@ -25,7 +25,7 @@ static UART_HandleTypeDef s_tmc_uart;
 static uint8_t             s_slave_addr      = 0;          /* Dynamic slave address (0..3) */
 static bool                s_is_initialized  = false;
 static uint32_t            s_gconf_shadow    = 0;
-static uint32_t            s_chopconf_shadow = 0x10000053; /* Default chopper */
+static uint32_t            s_chopconf_shadow = 0x10028053; /* intpol=1, vsense=1 (0.18V for Adafruit 0.05R), tbl=24clk, hstrt=5, toff=3 */
 
 static uint8_t             s_diag_tx_status  = 0xFF;
 static uint8_t             s_diag_rx_status  = 0xFF;
@@ -311,17 +311,19 @@ bool TMC2209_Init(void)
   /* 6. Commit final Base Global Configuration */
   TMC2209_WriteRegister(TMC2209_REG_GCONF, s_gconf_shadow);
 
-  /* 7. Set Standard Running Current (1.5 A / 1500 mA RMS limit over UART, 40% hold current) */
-  TMC2209_SetCurrent(1500, 40);
-
-  /* 8. Configure 1/16 Microstepping with 256-Microstep Interpolation */
+  /* 7. Configure 1/16 Microstepping with 256-Microstep Interpolation & vsense=1 BEFORE energizing current */
   TMC2209_SetMicrostepping(16, true);
+
+  /* 8. Set Standard Running Current (1.4 A / 1400 mA true RMS on Adafruit 0.05 ohm Rsense, 55% hold) */
+  TMC2209_SetCurrent(1400, 55);
 
   /* 9. Enable StealthChop2 (Whisper-Quiet Operation) */
   TMC2209_EnableStealthChop(true);
 
-  /* 10. Enable CoolStep (Automatic load-adaptive current reduction) */
-  TMC2209_ConfigureCoolStep(2, 5);
+  /* 10. Keep CoolStep OFF by default so assistive spring return never halves coil torque,
+  ** while keeping TCOOLTHRS set so StallGuard4 diagnostics continue operating. */
+  TMC2209_WriteRegister(TMC2209_REG_TCOOLTHRS, 200000);
+  TMC2209_ConfigureCoolStep(0, 0);
 
   /* 11. Configure StallGuard4 load sensitivity */
   TMC2209_ConfigureStallGuard(64);
@@ -341,17 +343,24 @@ bool TMC2209_Init(void)
 */
 bool TMC2209_SetCurrent(uint16_t run_current_mA, uint8_t hold_percent)
 {
-  if ( run_current_mA > 2000 )
+  if ( run_current_mA > 1800 )
   {
-    run_current_mA = 2000;
+    run_current_mA = 1800;
   }
   if ( hold_percent > 100 )
   {
     hold_percent = 100;
   }
 
-  /* Maximum RMS current for Rsense = 0.11 ohms at CS = 31 is ~1770 mA */
-  float max_rms_mA = 1770.0f;
+  /* Ensure vsense=1 (VFS = 0.180 V) is active for Adafruit TMC2209 breakout (Rsense = 0.05 ohms):
+  ** I_RMS_max = 0.180 / (sqrt(2) * (0.05 + 0.02)) = ~1818 mA at CS = 31 (prevents 3.28 A overdrive) */
+  if ( (s_chopconf_shadow & (1U << 17)) == 0U )
+  {
+    s_chopconf_shadow |= (1U << 17);
+    TMC2209_WriteRegister(TMC2209_REG_CHOPCONF, s_chopconf_shadow);
+  }
+
+  float max_rms_mA = 1818.0f;
   int cs = (int)lroundf(((float)run_current_mA / max_rms_mA) * 32.0f) - 1;
   if ( cs < 0 )
   {
